@@ -1,10 +1,16 @@
 ﻿{
   "manifest_version": 3,
   "name": "AutoCut Image Downloader",
-  "version": "1.0",
+  "version": "2.0",
   "description": "Download AI generated images from Google Flow automatically",
-  "permissions": ["downloads", "activeTab", "scripting", "storage", "debugger", "tabs"],
-  "host_permissions": ["https://labs.google/*", "https://fal.ai/*"],
+  "permissions": [
+    "downloads", "activeTab", "scripting",
+    "storage", "debugger", "tabs", "notifications"
+  ],
+  "host_permissions": [
+    "https://labs.google/*",
+    "https://fal.ai/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

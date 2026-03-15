@@ -1,35 +1,98 @@
-﻿chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'START_QUEUE') {
-    runQueue(msg.scenes, msg.prefix, msg.tabId);
-    sendResponse({ ok: true });
+﻿// ═══════════════════════════════════════════════════
+//  AutoCut v2 — background.js (Service Worker)
+// ═══════════════════════════════════════════════════
+
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [10000, 30000, 60000];
+
+// ── Keep-Alive: يمنع الـ service worker من الموت ──
+let keepAliveInterval = null;
+function startKeepAlive() {
+  if (keepAliveInterval) return;
+  keepAliveInterval = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 20000);
+}
+function stopKeepAlive() {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
   }
-  return true;
+}
+
+// ── Message Listener ──────────────────────────────
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'START_QUEUE') {
+    runQueue(msg.scenes, msg.prefix, msg.tabId, false);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'RETRY_FAILED') {
+    runQueue(msg.scenes, msg.prefix, msg.tabId, true);
+    sendResponse({ ok: true });
+    return true;
+  }
 });
 
-async function runQueue(scenes, prefix, tabId) {
-  const startFrom = await getStorage('doneCount') || 0;
+// ── Main Queue Runner ─────────────────────────────
+async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
+  startKeepAlive();
 
-  for (let i = startFrom; i < scenes.length; i++) {
+  const sessionStart = Date.now();
+  const timings = [];
+
+  let startFrom = 0;
+  if (!retryFailedOnly) {
+    startFrom = await getStorage('doneCount') || 0;
+  }
+
+  const scenesToRun = retryFailedOnly
+    ? scenes.filter(s => s._failed)
+    : scenes;
+
+  await setStorage({
+    isRunning: true,
+    stopFlag: false,
+    ...(retryFailedOnly ? {} : { doneCount: startFrom, failCount: 0 })
+  });
+
+  for (let i = 0; i < scenesToRun.length; i++) {
     const stopped = await getStorage('stopFlag');
     if (stopped) break;
 
-    const scene = scenes[i];
-    const num   = String(scene.scene_number).padStart(3, '0');
+    const scene = scenesToRun[i];
+    const num = String(scene.scene_number).padStart(3, '0');
     const fname = prefix + num + '.png';
 
-    sendLog('info', '[' + (i+1) + '/' + scenes.length + '] ' + fname);
-    sendProgress(i, scenes.length, scene);
+    sendLog('info', `[${i + 1}/${scenesToRun.length}] ${fname}`);
+    sendProgress(i, scenesToRun.length, scene);
 
-    // حفظ البروجرس في storage عشان يرجع لو البوب اب اتفتحت
+    const avgTimeout = calcSmartTimeout(timings);
+
     await setStorage({
       lastProgress: {
-        i, total: scenes.length, scene,
+        i, total: scenesToRun.length, scene,
         done: await getStorage('doneCount') || 0,
         fail: await getStorage('failCount') || 0
       }
     });
 
-    const ok = await processScene(scene, fname, tabId);
+    // ── Retry Loop ────────────────────────────────
+    let ok = false;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_DELAYS[attempt - 1];
+        sendLog('info', `↻ Retry ${attempt}/${MAX_RETRIES - 1} — waiting ${delay / 1000}s...`);
+        await sleep(delay);
+      }
+      const t0 = Date.now();
+      ok = await processScene(scene, fname, tabId, avgTimeout);
+      if (ok) {
+        timings.push(Date.now() - t0);
+        if (timings.length > 20) timings.shift();
+        break;
+      }
+    }
 
     let done = await getStorage('doneCount') || 0;
     let fail = await getStorage('failCount') || 0;
@@ -37,23 +100,65 @@ async function runQueue(scenes, prefix, tabId) {
     if (ok) {
       done++;
       await setStorage({ doneCount: done });
-      sendLog('ok', 'Done: ' + fname);
+      sendLog('ok', `✓ Saved: ${fname}`);
+      // Mark scene as done
+      scene._done = true;
+      scene._failed = false;
     } else {
       fail++;
       await setStorage({ failCount: fail });
-      sendLog('err', 'Failed: ' + fname);
+      sendLog('err', `✗ Failed after ${MAX_RETRIES} retries: ${fname}`);
+      scene._failed = true;
+      scene._done = false;
+    }
+
+    // Update scene list with statuses
+    const allScenes = await getStorage('scenes') || scenes;
+    const idx = allScenes.findIndex(s => s.scene_number === scene.scene_number);
+    if (idx !== -1) {
+      allScenes[idx] = scene;
+      await setStorage({ scenes: allScenes });
     }
 
     sendStats(done, fail);
-    await setStorage({ lastProgress: { i, total: scenes.length, scene, done, fail } });
+    await setStorage({
+      lastProgress: { i, total: scenesToRun.length, scene, done, fail }
+    });
     await sleep(2000);
   }
 
-  sendLog('ok', 'All done!');
-  chrome.runtime.sendMessage({ type: 'DONE' }).catch(() => {});
+  // ── Session complete ──────────────────────────
+  const finalDone = await getStorage('doneCount') || 0;
+  const finalFail = await getStorage('failCount') || 0;
+  const duration = Math.round((Date.now() - sessionStart) / 1000);
+
+  // Save session to history
+  await saveSessionHistory(scenesToRun.length, finalDone, finalFail, duration);
+
+  // Desktop notification
+  chrome.notifications.create({
+    type: 'basic',
+    iconUrl: 'icons/icon128.png',
+    title: 'AutoCut — اكتمل!',
+    message: `✓ ${finalDone} صورة تمت | ✗ ${finalFail} فشل | ${duration}s`
+  });
+
+  sendLog('ok', `🎉 All done! ${finalDone} ✓  ${finalFail} ✗  (${duration}s)`);
+  chrome.runtime.sendMessage({ type: 'DONE', done: finalDone, fail: finalFail }).catch(() => {});
+
+  stopKeepAlive();
+  await setStorage({ isRunning: false });
 }
 
-async function processScene(scene, fname, tabId) {
+// ── Smart Timeout Calculator ──────────────────────
+function calcSmartTimeout(timings) {
+  if (!timings.length) return 90000;
+  const avg = timings.reduce((a, b) => a + b, 0) / timings.length;
+  return Math.max(45000, Math.min(120000, avg * 1.5));
+}
+
+// ── Process Single Scene ──────────────────────────
+async function processScene(scene, fname, tabId, timeout = 90000) {
   let debuggerAttached = false;
   const debuggee = { tabId };
 
@@ -76,19 +181,17 @@ async function processScene(scene, fname, tabId) {
   };
 
   try {
-    // 1. Focus وحدد كل المحتوى
+    // 1. Focus editor
     const prepared = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
         const box = document.querySelector('[data-slate-editor="true"][contenteditable="true"]');
         if (!box) return false;
-        box.click();
-        box.focus();
+        box.click(); box.focus();
         const sel = window.getSelection();
         const range = document.createRange();
         range.selectNodeContents(box);
-        sel.removeAllRanges();
-        sel.addRange(range);
+        sel.removeAllRanges(); sel.addRange(range);
         return true;
       }
     });
@@ -101,7 +204,7 @@ async function processScene(scene, fname, tabId) {
     await dbg.send('Input.insertText', { text: scene.main_prompt });
     await sleep(400);
 
-    // 3. تحقق
+    // 3. Verify
     const verified = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -112,7 +215,7 @@ async function processScene(scene, fname, tabId) {
     if (!verified?.[0]?.result) { sendLog('err', 'Inject failed'); return false; }
     sendLog('ok', 'Prompt injected');
 
-    // 4. ضغط زرار الإرسال
+    // 4. Click send
     const clicked = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -126,20 +229,16 @@ async function processScene(scene, fname, tabId) {
     });
     if (!clicked?.[0]?.result) { sendLog('err', 'Send button not found'); return false; }
 
-    // 5. Polling لحد ما الصورة الجديدة تظهر
-    sendLog('info', 'Waiting for image...');
-    const imgUrl = await pollForImage(tabId, 90000);
-    if (!imgUrl) { sendLog('err', 'Image not found after 90s'); return false; }
-    sendLog('ok', 'Image found: ' + imgUrl.slice(0, 60));
+    // 5. Poll for image
+    sendLog('info', `Waiting for image (timeout: ${Math.round(timeout / 1000)}s)...`);
+    const imgUrl = await pollForImage(tabId, timeout);
+    if (!imgUrl) { sendLog('err', `Image not found after ${Math.round(timeout / 1000)}s`); return false; }
+    sendLog('ok', 'Image found');
 
-    // 6. تنزيل الصورة
+    // 6. Download
     const dlFilename = 'AutoCut/' + fname;
     await new Promise((res, rej) => {
-      chrome.downloads.download({
-        url: imgUrl,
-        filename: dlFilename,
-        saveAs: false
-      }, id => {
+      chrome.downloads.download({ url: imgUrl, filename: dlFilename, saveAs: false }, id => {
         if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
         else res(id);
       });
@@ -148,39 +247,31 @@ async function processScene(scene, fname, tabId) {
     sendLog('ok', 'Saved: ' + dlFilename);
     return true;
 
-  } catch(e) {
+  } catch (e) {
     sendLog('err', e.message?.slice(0, 100) || 'Unknown error');
     return false;
   } finally {
-    if (debuggerAttached) {
-      try { await dbg.detach(); } catch(_) {}
-    }
+    if (debuggerAttached) { try { await dbg.detach(); } catch (_) {} }
   }
 }
 
+// ── Poll for new image ────────────────────────────
 async function pollForImage(tabId, timeout = 90000) {
-  // الـ selector الصح لـ Google Flow
   const selector = 'img[src*="media.getMediaUrlRedirect"]';
-
-  // احفظ الـ URLs الموجودة قبل الإرسال
   const beforeRes = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (sel) => {
-      const imgs = document.querySelectorAll(sel);
-      return Array.from(imgs).map(i => i.src);
-    },
+    func: (sel) => Array.from(document.querySelectorAll(sel)).map(i => i.src),
     args: [selector]
   });
   const beforeUrls = new Set(beforeRes?.[0]?.result || []);
-
   const start = Date.now();
+
   while (Date.now() - start < timeout) {
     await sleep(3000);
     const res = await chrome.scripting.executeScript({
       target: { tabId },
       func: (sel, before) => {
-        const imgs = document.querySelectorAll(sel);
-        for (const img of imgs) {
+        for (const img of document.querySelectorAll(sel)) {
           if (!before.includes(img.src)) return img.src;
         }
         return null;
@@ -193,6 +284,19 @@ async function pollForImage(tabId, timeout = 90000) {
   return null;
 }
 
+// ── Session History ───────────────────────────────
+async function saveSessionHistory(total, done, fail, duration) {
+  const history = await getStorage('sessionHistory') || [];
+  history.unshift({
+    date: new Date().toISOString(),
+    total, done, fail, duration
+  });
+  if (history.length > 20) history.splice(20);
+  await setStorage({ sessionHistory: history });
+  chrome.runtime.sendMessage({ type: 'HISTORY_UPDATE' }).catch(() => {});
+}
+
+// ── Helpers ───────────────────────────────────────
 function sendLog(type, msg) {
   chrome.runtime.sendMessage({ type: 'LOG', logType: type, msg }).catch(() => {});
 }
