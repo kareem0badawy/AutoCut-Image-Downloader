@@ -200,6 +200,15 @@ get('stop-btn').addEventListener('click', () => {
   get('stop-btn').style.display = 'none';
 });
 
+// ── Inject Control ─────────────────────────────────
+get('inject-control-btn').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) { addLog('err', 'افتح Google Flow الأول'); return; }
+  chrome.tabs.sendMessage(tab.id, { type: 'INJECT_CONTROL' });
+  addLog('info', '🎯 تم تفعيل الكنترول في الصفحة');
+});
+
+
 // ── Retry Failed ───────────────────────────────────
 get('retry-btn').addEventListener('click', async () => {
   const failed = scenes.filter(s => s._failed);
@@ -269,24 +278,54 @@ get('desel-all-btn').addEventListener('click', () => {
 
 get('dl-selected-btn').addEventListener('click', () => {
   if (!selectedImages.size) return;
-  const folder = buildFolder(); // ✅ مش save-folder
+  
+  const folder = buildFolder();
+  
   chrome.storage.local.get(['capturedImages'], r => {
     const imgs = (r.capturedImages || []).filter(img => selectedImages.has(img.id));
-    imgs.forEach(img => {
-      chrome.runtime.sendMessage({ type: 'MANUAL_DOWNLOAD', url: img.url, filename: img.filename, folder });
-    });
-    addLog('ok', `📥 تحميل ${imgs.length} صورة...`);
-    chrome.storage.local.get(['capturedImages'], r2 => {
-      const all = r2.capturedImages || [];
-      all.forEach(img => { if (selectedImages.has(img.id)) img.downloaded = true; });
-      chrome.storage.local.set({ capturedImages: all }, () => {
-        selectedImages.clear();
-        renderGallery();
-        updateSelectionButtons();
+    
+    if (!imgs.length) {
+      addLog('err', 'مفيش صور محددة للتحميل');
+      return;
+    }
+    
+    let count = 0;
+    imgs.forEach((img, index) => {
+      // بناء اسم الملف الصح
+      const num  = String(img.scene_number || index + 1).padStart(3, '0');
+      const desc = (img.scene_description || '')
+        .replace(/,/g, ' ')
+        .replace(/[\\/:*?"<>|]/g, '')
+        .trim()
+        .slice(0, 80);
+      const filename = desc
+        ? `${get('save-prefix').value || 'scene_'}${num}_${desc}.png`
+        : `${get('save-prefix').value || 'scene_'}${num}.png`;
+      
+      chrome.runtime.sendMessage({
+        type:     'MANUAL_DOWNLOAD',
+        url:      img.url,
+        filename: filename,
+        folder:   folder          // ✅ بيستخدم buildFolder()
       });
+      count++;
+    });
+    
+    addLog('ok', `📥 بدأ تحميل ${count} صورة → Downloads/${folder}/`);
+    
+    // علّم الصور كـ downloaded
+    const all = r.capturedImages || [];
+    all.forEach(img => {
+      if (selectedImages.has(img.id)) img.downloaded = true;
+    });
+    chrome.storage.local.set({ capturedImages: all }, () => {
+      selectedImages.clear();
+      renderGallery();
+      updateSelectionButtons();
     });
   });
 });
+
 
 get('del-selected-btn').addEventListener('click', () => {
   if (!selectedImages.size) return;
