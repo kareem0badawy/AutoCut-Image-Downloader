@@ -1,0 +1,128 @@
+﻿<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<title>AutoCut</title>
+<style>
+  :root{--bg:#0f172a;--surface:#1e293b;--border:#334155;--accent:#6366f1;--accent-hover:#4f46e5;--text:#f1f5f9;--muted:#94a3b8;--success:#22c55e;--error:#ef4444;--radius:0.5rem;--radius-lg:0.75rem;}
+  .light{--bg:#f8fafc;--surface:#ffffff;--border:#e2e8f0;--text:#0f172a;--muted:#64748b;}
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{width:400px;min-height:520px;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px;}
+  .header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;}
+  .logo{font-weight:700;font-size:16px;}.logo span{color:var(--accent);}
+  .header-actions{display:flex;gap:8px;align-items:center;}
+  .icon-btn{background:var(--border);border:none;border-radius:var(--radius);color:var(--text);cursor:pointer;padding:6px 10px;font-size:15px;transition:background .2s;}
+  .icon-btn:hover{background:var(--accent);}
+  .icon-btn.danger:hover{background:var(--error);}
+  .main{padding:16px;display:flex;flex-direction:column;gap:12px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;}
+  .card-title{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;}
+  .upload-area{border:2px dashed var(--border);border-radius:var(--radius-lg);padding:20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;}
+  .upload-area:hover{border-color:var(--accent);background:rgba(99,102,241,.05);}
+  .upload-area.loaded{border-color:var(--success);border-style:solid;}
+  .upload-icon{font-size:28px;margin-bottom:8px;}
+  .upload-text{color:var(--muted);font-size:13px;}
+  .upload-count{color:var(--success);font-weight:600;font-size:13px;margin-top:4px;}
+  #json-input{display:none;}
+  .input-group{display:flex;flex-direction:column;gap:6px;}
+  .input-label{font-size:12px;color:var(--muted);}
+  .input{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);padding:8px 12px;font-size:13px;width:100%;transition:border-color .2s;}
+  .input:focus{outline:none;border-color:var(--accent);}
+  .input-row{display:flex;gap:8px;align-items:center;}
+  .browse-btn{background:var(--accent);border:none;border-radius:var(--radius);color:#fff;cursor:pointer;padding:8px 12px;font-size:12px;white-space:nowrap;font-weight:600;}
+  .browse-btn:hover{background:var(--accent-hover);}
+  .stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+  .stat{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;text-align:center;}
+  .stat-val{font-size:18px;font-weight:700;}
+  .stat-lbl{font-size:10px;color:var(--muted);margin-top:2px;}
+  .green{color:var(--success);}.red{color:var(--error);}.blue{color:var(--accent);}
+  .progress-wrap{display:none;flex-direction:column;gap:6px;}
+  .progress-header{display:flex;justify-content:space-between;}
+  .progress-label{font-size:12px;color:var(--muted);}
+  .progress-pct{font-size:13px;font-weight:600;color:var(--accent);}
+  .progress-bar-bg{background:var(--border);border-radius:99px;height:6px;overflow:hidden;}
+  .progress-bar{background:linear-gradient(90deg,var(--accent),#818cf8);height:100%;width:0%;border-radius:99px;transition:width .3s ease;}
+  .progress-scene{font-size:11px;color:var(--muted);margin-top:2px;}
+  .btn{border:none;border-radius:var(--radius);cursor:pointer;font-weight:600;font-size:14px;padding:10px 16px;transition:all .2s;width:100%;}
+  .btn-primary{background:var(--accent);color:#fff;}
+  .btn-primary:hover:not(:disabled){background:var(--accent-hover);transform:translateY(-1px);}
+  .btn-primary:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-danger{background:var(--error);color:#fff;margin-top:4px;}
+  .btn-danger:hover{background:#dc2626;}
+  .log{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:8px 10px;max-height:90px;overflow-y:auto;font-size:11px;font-family:monospace;color:var(--muted);display:none;}
+  .log .ok{color:var(--success);}.log .err{color:var(--error);}.log .info{color:var(--accent);}
+  /* Confirm dialog */
+  .confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;}
+  .confirm-overlay.show{display:flex;}
+  .confirm-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;width:280px;text-align:center;}
+  .confirm-title{font-size:15px;font-weight:700;margin-bottom:8px;}
+  .confirm-msg{font-size:13px;color:var(--muted);margin-bottom:16px;}
+  .confirm-btns{display:flex;gap:8px;}
+  .confirm-yes{flex:1;background:var(--error);border:none;border-radius:var(--radius);color:#fff;cursor:pointer;padding:8px;font-weight:600;}
+  .confirm-no{flex:1;background:var(--border);border:none;border-radius:var(--radius);color:var(--text);cursor:pointer;padding:8px;font-weight:600;}
+</style>
+</head>
+<body>
+
+<!-- Confirm Dialog -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-title">⚠️ تفريغ كل شيء؟</div>
+    <div class="confirm-msg">هيتمسح الملف والإحصائيات واللوج. مش هترجع.</div>
+    <div class="confirm-btns">
+      <button class="confirm-yes" id="confirm-yes">✓ امسح</button>
+      <button class="confirm-no" id="confirm-no">✕ إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<div class="header">
+  <div class="logo">✂️ Auto<span>Cut</span></div>
+  <div class="header-actions">
+    <button class="icon-btn danger" id="clear-btn" title="تفريغ كل شيء">🗑️</button>
+    <button class="icon-btn" id="theme-btn">🌙</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="card">
+    <div class="card-title">📂 ملف البرومبتات</div>
+    <div class="upload-area" id="upload-area">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text">اضغط لرفع prompts.json</div>
+      <div class="upload-count" id="upload-count"></div>
+    </div>
+    <input type="file" id="json-input" accept=".json"/>
+  </div>
+  <div class="card">
+    <div class="card-title">💾 مسار حفظ الصور</div>
+    <div class="input-group">
+      <div class="input-row">
+        <input class="input" id="save-prefix" value="scene_" style="width:80px;flex-shrink:0;"/>
+        <input class="input" id="save-folder" placeholder="اختار فولدر..." readonly/>
+        <button class="browse-btn" id="browse-btn">📁 اختار</button>
+      </div>
+      <div class="input-label" id="path-display">الصور: scene_001.png, scene_002.png ...</div>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="stat-val blue" id="stat-total">0</div><div class="stat-lbl">إجمالي</div></div>
+    <div class="stat"><div class="stat-val green" id="stat-done">0</div><div class="stat-lbl">تم</div></div>
+    <div class="stat"><div class="stat-val red" id="stat-fail">0</div><div class="stat-lbl">فشل</div></div>
+  </div>
+  <div class="progress-wrap" id="progress-wrap">
+    <div class="progress-header">
+      <span class="progress-label">جاري التنزيل...</span>
+      <span class="progress-pct" id="progress-pct">0%</span>
+    </div>
+    <div class="progress-bar-bg"><div class="progress-bar" id="progress-bar"></div></div>
+    <div class="progress-scene" id="progress-scene"></div>
+  </div>
+  <button class="btn btn-primary" id="start-btn" disabled>▶ ابدأ التنزيل</button>
+  <button class="btn btn-danger" id="stop-btn" style="display:none">⏹ إيقاف</button>
+  <div class="log" id="log"></div>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
