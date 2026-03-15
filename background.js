@@ -1,54 +1,53 @@
 ﻿// ═══════════════════════════════════════════════════
-//  AutoCut v2 — background.js (Service Worker)
+//  AutoCut v2.1 — background.js
 // ═══════════════════════════════════════════════════
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [10000, 30000, 60000];
 
-// ── Keep-Alive: يمنع الـ service worker من الموت ──
+// ── Keep-Alive ────────────────────────────────────
 let keepAliveInterval = null;
 function startKeepAlive() {
   if (keepAliveInterval) return;
-  keepAliveInterval = setInterval(() => {
-    chrome.runtime.getPlatformInfo(() => {});
-  }, 20000);
+  keepAliveInterval = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
 }
 function stopKeepAlive() {
-  if (keepAliveInterval) {
-    clearInterval(keepAliveInterval);
-    keepAliveInterval = null;
-  }
+  if (keepAliveInterval) { clearInterval(keepAliveInterval); keepAliveInterval = null; }
 }
 
 // ── Message Listener ──────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'START_QUEUE') {
-    runQueue(msg.scenes, msg.prefix, msg.tabId, false);
+    runQueue(msg.scenes, msg.prefix, msg.folder, msg.tabId, false);
     sendResponse({ ok: true });
     return true;
   }
   if (msg.type === 'RETRY_FAILED') {
-    runQueue(msg.scenes, msg.prefix, msg.tabId, true);
+    runQueue(msg.scenes, msg.prefix, msg.folder, msg.tabId, true);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'MANUAL_DOWNLOAD') {
+    doDownload(msg.url, msg.filename, msg.folder);
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'DELETE_DOWNLOAD') {
+    chrome.downloads.removeFile(msg.downloadId, () => {});
     sendResponse({ ok: true });
     return true;
   }
 });
 
 // ── Main Queue Runner ─────────────────────────────
-async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
+async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
   startKeepAlive();
-
   const sessionStart = Date.now();
   const timings = [];
+  const savePath = (folder || 'AutoCut').replace(/[<>:"|?*]/g, '').trim();
 
-  let startFrom = 0;
-  if (!retryFailedOnly) {
-    startFrom = await getStorage('doneCount') || 0;
-  }
-
-  const scenesToRun = retryFailedOnly
-    ? scenes.filter(s => s._failed)
-    : scenes;
+  let startFrom = retryFailedOnly ? 0 : (await getStorage('doneCount') || 0);
+  const scenesToRun = retryFailedOnly ? scenes.filter(s => s._failed) : scenes;
 
   await setStorage({
     isRunning: true,
@@ -61,8 +60,7 @@ async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
     if (stopped) break;
 
     const scene = scenesToRun[i];
-    const num = String(scene.scene_number).padStart(3, '0');
-    const fname = prefix + num + '.png';
+    const fname = buildFilename(prefix, scene);
 
     sendLog('info', `[${i + 1}/${scenesToRun.length}] ${fname}`);
     sendProgress(i, scenesToRun.length, scene);
@@ -77,7 +75,10 @@ async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
       }
     });
 
-    // ── Retry Loop ────────────────────────────────
+    // Check if auto-download is enabled
+    const autoDownload = await getStorage('autoDownload');
+    const shouldDownload = autoDownload !== false; // default true
+
     let ok = false;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
@@ -86,7 +87,7 @@ async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
         await sleep(delay);
       }
       const t0 = Date.now();
-      ok = await processScene(scene, fname, tabId, avgTimeout);
+      ok = await processScene(scene, fname, tabId, avgTimeout, savePath, shouldDownload);
       if (ok) {
         timings.push(Date.now() - t0);
         if (timings.length > 20) timings.shift();
@@ -100,47 +101,35 @@ async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
     if (ok) {
       done++;
       await setStorage({ doneCount: done });
-      sendLog('ok', `✓ Saved: ${fname}`);
-      // Mark scene as done
-      scene._done = true;
-      scene._failed = false;
+      sendLog('ok', `✓ ${fname}`);
+      scene._done = true; scene._failed = false;
     } else {
       fail++;
       await setStorage({ failCount: fail });
-      sendLog('err', `✗ Failed after ${MAX_RETRIES} retries: ${fname}`);
-      scene._failed = true;
-      scene._done = false;
+      sendLog('err', `✗ Failed: ${fname}`);
+      scene._failed = true; scene._done = false;
     }
 
-    // Update scene list with statuses
     const allScenes = await getStorage('scenes') || scenes;
     const idx = allScenes.findIndex(s => s.scene_number === scene.scene_number);
-    if (idx !== -1) {
-      allScenes[idx] = scene;
-      await setStorage({ scenes: allScenes });
-    }
+    if (idx !== -1) { allScenes[idx] = scene; await setStorage({ scenes: allScenes }); }
 
     sendStats(done, fail);
-    await setStorage({
-      lastProgress: { i, total: scenesToRun.length, scene, done, fail }
-    });
+    await setStorage({ lastProgress: { i, total: scenesToRun.length, scene, done, fail } });
     await sleep(2000);
   }
 
-  // ── Session complete ──────────────────────────
   const finalDone = await getStorage('doneCount') || 0;
   const finalFail = await getStorage('failCount') || 0;
   const duration = Math.round((Date.now() - sessionStart) / 1000);
 
-  // Save session to history
   await saveSessionHistory(scenesToRun.length, finalDone, finalFail, duration);
 
-  // Desktop notification
   chrome.notifications.create({
     type: 'basic',
     iconUrl: 'icons/icon128.png',
     title: 'AutoCut — اكتمل!',
-    message: `✓ ${finalDone} صورة تمت | ✗ ${finalFail} فشل | ${duration}s`
+    message: `✓ ${finalDone} صورة | ✗ ${finalFail} فشل | ${duration}s`
   });
 
   sendLog('ok', `🎉 All done! ${finalDone} ✓  ${finalFail} ✗  (${duration}s)`);
@@ -150,15 +139,36 @@ async function runQueue(scenes, prefix, tabId, retryFailedOnly) {
   await setStorage({ isRunning: false });
 }
 
-// ── Smart Timeout Calculator ──────────────────────
-function calcSmartTimeout(timings) {
-  if (!timings.length) return 90000;
-  const avg = timings.reduce((a, b) => a + b, 0) / timings.length;
-  return Math.max(45000, Math.min(120000, avg * 1.5));
+// ── Build Filename with description ──────────────
+function buildFilename(prefix, scene) {
+  const num = String(scene.scene_number).padStart(3, '0');
+  // Clean description: replace commas with space, remove forbidden chars
+  const desc = (scene.scene_description || '')
+    .replace(/,/g, ' ')
+    .replace(/[<>:"/\\|?*]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80); // max 80 chars for description part
+  return `${prefix}${num}_${desc}.png`;
+}
+
+// ── Download Helper ───────────────────────────────
+async function doDownload(url, filename, folder) {
+  const savePath = (folder || 'AutoCut').replace(/[<>:"|?*]/g, '').trim();
+  return new Promise((res, rej) => {
+    chrome.downloads.download({
+      url,
+      filename: `${savePath}/${filename}`,
+      saveAs: false
+    }, id => {
+      if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
+      else res(id);
+    });
+  });
 }
 
 // ── Process Single Scene ──────────────────────────
-async function processScene(scene, fname, tabId, timeout = 90000) {
+async function processScene(scene, fname, tabId, timeout = 90000, savePath = 'AutoCut', shouldDownload = true) {
   let debuggerAttached = false;
   const debuggee = { tabId };
 
@@ -169,9 +179,7 @@ async function processScene(scene, fname, tabId, timeout = 90000) {
         else res();
       });
     }),
-    detach: () => new Promise(res => {
-      chrome.debugger.detach(debuggee, () => res());
-    }),
+    detach: () => new Promise(res => chrome.debugger.detach(debuggee, () => res())),
     send: (method, params = {}) => new Promise((res, rej) => {
       chrome.debugger.sendCommand(debuggee, method, params, result => {
         if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
@@ -235,16 +243,33 @@ async function processScene(scene, fname, tabId, timeout = 90000) {
     if (!imgUrl) { sendLog('err', `Image not found after ${Math.round(timeout / 1000)}s`); return false; }
     sendLog('ok', 'Image found');
 
-    // 6. Download
-    const dlFilename = 'AutoCut/' + fname;
-    await new Promise((res, rej) => {
-      chrome.downloads.download({ url: imgUrl, filename: dlFilename, saveAs: false }, id => {
-        if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
-        else res(id);
-      });
+    // 6. Save image URL for manual download tab
+    const capturedImages = await getStorage('capturedImages') || [];
+    capturedImages.push({
+      id: Date.now(),
+      url: imgUrl,
+      filename: fname,
+      scene_number: scene.scene_number,
+      scene_description: scene.scene_description,
+      downloaded: false,
+      timestamp: new Date().toISOString()
     });
+    await setStorage({ capturedImages });
+    chrome.runtime.sendMessage({ type: 'IMAGE_CAPTURED', capturedImages }).catch(() => {});
 
-    sendLog('ok', 'Saved: ' + dlFilename);
+    // 7. Auto-download if enabled
+    if (shouldDownload) {
+      await doDownload(imgUrl, fname, savePath);
+      sendLog('ok', `Saved: ${savePath}/${fname}`);
+
+      // Mark as downloaded
+      const imgs = await getStorage('capturedImages') || [];
+      const imgIdx = imgs.findIndex(img => img.filename === fname);
+      if (imgIdx !== -1) { imgs[imgIdx].downloaded = true; await setStorage({ capturedImages: imgs }); }
+    } else {
+      sendLog('info', `📋 Captured (auto-download OFF): ${fname}`);
+    }
+
     return true;
 
   } catch (e) {
@@ -287,13 +312,17 @@ async function pollForImage(tabId, timeout = 90000) {
 // ── Session History ───────────────────────────────
 async function saveSessionHistory(total, done, fail, duration) {
   const history = await getStorage('sessionHistory') || [];
-  history.unshift({
-    date: new Date().toISOString(),
-    total, done, fail, duration
-  });
+  history.unshift({ date: new Date().toISOString(), total, done, fail, duration });
   if (history.length > 20) history.splice(20);
   await setStorage({ sessionHistory: history });
   chrome.runtime.sendMessage({ type: 'HISTORY_UPDATE' }).catch(() => {});
+}
+
+// ── Smart Timeout ─────────────────────────────────
+function calcSmartTimeout(timings) {
+  if (!timings.length) return 90000;
+  const avg = timings.reduce((a, b) => a + b, 0) / timings.length;
+  return Math.max(45000, Math.min(120000, avg * 1.5));
 }
 
 // ── Helpers ───────────────────────────────────────
