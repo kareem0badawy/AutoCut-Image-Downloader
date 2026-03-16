@@ -561,7 +561,7 @@ function doDownload(url, filename, folder) {
 // ══════════════════════════════════════════════════
 //  FILENAME BUILDER  (shared with content.js logic)
 // ══════════════════════════════════════════════════
-function buildFilename(prefix, num, desc) {
+function buildFilename(prefix, num, desc, version = null) {
   const n = String(num || 1).padStart(3, "0");
   const d = (desc || "")
     .replace(/,/g, " ")
@@ -569,7 +569,8 @@ function buildFilename(prefix, num, desc) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
-  return d ? `${prefix}${n}_${d}.png` : `${prefix}${n}.png`;
+  const v = version ? `_x${version}` : "";
+  return d ? `${prefix}${n}_${d}${v}.png` : `${prefix}${n}${v}.png`;
 }
 
 // ══════════════════════════════════════════════════

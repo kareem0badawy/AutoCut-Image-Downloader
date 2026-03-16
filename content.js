@@ -24,7 +24,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function buildFilename(prefix, num, desc) {
+function buildFilename(prefix, num, desc, version = null) {
   const n = String(num).padStart(3, "0");
   const d = (desc || "")
     .replace(/,/g, " ")
@@ -32,7 +32,8 @@ function buildFilename(prefix, num, desc) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
-  return d ? `${prefix}${n}_${d}.png` : `${prefix}${n}.png`;
+  const v = version ? `_x${version}` : "";
+  return d ? `${prefix}${n}_${d}${v}.png` : `${prefix}${n}${v}.png`;
 }
 
 // ══════════════════════════════════════════════════
@@ -467,12 +468,13 @@ async function executeAction() {
   if (!isExtensionAlive()) { showContextInvalidatedWarning(); return; }
 
   const storage = await new Promise((resolve) =>
-    chrome.storage.local.get(["capturedImages", "scenes", "prefix"], resolve),
+    chrome.storage.local.get(["capturedImages", "scenes", "prefix", "flowSettings"], resolve),
   ).catch(() => ({}));
 
   const capturedImages = storage.capturedImages || [];
   const allScenes      = storage.scenes         || [];
   const prefix         = storage.prefix         || "scene_";
+  const imgsPerScene   = storage.flowSettings?.count || 1;
   const orderedTiles   = getInnerTiles();
   const selectedData   = [];
   const seen           = new Set();
@@ -493,18 +495,29 @@ async function executeAction() {
 
     let sceneNumber, sceneDesc, filename;
 
-    if (captured) {
-      sceneNumber = captured.scene_number;
-      sceneDesc   = captured.scene_description;
-      filename    = captured.filename;
-    } else {
-      const domIndex   = orderedTiles.indexOf(tile);
-      const sceneIndex = domIndex >= 0 ? domIndex : 0;
-      const scene      = allScenes[sceneIndex];
-      sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
-      sceneDesc   = scene ? scene.scene_description : "";
-      filename    = buildFilename(prefix, sceneNumber, sceneDesc);
-    }
+    const domIndex   = orderedTiles.indexOf(tile);
+    const idx        = domIndex >= 0 ? domIndex : 0;
+    const sceneIndex = Math.floor(idx / imgsPerScene);
+    const version    = (idx % imgsPerScene) + 1;
+
+    // if (captured) {
+    //   // خد رقم الـ scene والـ desc من الـ captured
+    //   // لكن احسب الاسم دايماً من الـ DOM index الحالي
+    //   sceneNumber = captured.scene_number;
+    //   sceneDesc   = captured.scene_description;
+    // } else {
+    //   const scene = allScenes[sceneIndex];
+    //   sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
+    //   sceneDesc   = scene ? scene.scene_description : "";
+    // }
+
+    const scene = allScenes[sceneIndex];
+    sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
+    sceneDesc   = scene ? scene.scene_description : "";
+
+    // الاسم دايماً من الـ DOM — مش من المخزن
+    filename = buildFilename(prefix, sceneNumber, sceneDesc, imgsPerScene > 1 ? version : null);
+    console.log(`[AutoCut] tile ${idx} → scene ${sceneIndex} → x${version} → ${filename}`);
 
     selectedData.push({ id: tileId, url, scene_number: sceneNumber, scene_description: sceneDesc, filename });
   }

@@ -1,7 +1,7 @@
 ﻿{
   "manifest_version": 3,
   "name": "AutoCut Image Downloader",
-  "version": "1.0.9",
+  "version": "1.0.11",
   "description": "Download AI generated images from Google Flow automatically",
   "permissions": [
     "downloads", "activeTab", "scripting",

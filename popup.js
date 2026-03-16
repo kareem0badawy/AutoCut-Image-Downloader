@@ -79,6 +79,8 @@ document.getElementById('save-settings-header').addEventListener('click', () => 
   icon.style.transform = saveCollapsed ? 'rotate(0deg)' : 'rotate(90deg)';
 });
 
+document.getElementById('flow-toggle-wrap')
+  .addEventListener('click', e => e.stopPropagation());
 
 // ── Auto-download toggle ───────────────────────────
 get('auto-download-toggle').addEventListener('change', e => {
@@ -313,17 +315,19 @@ get('dl-selected-btn').addEventListener('click', () => {
       return;
     }
 
-    let count = 0;
-    imgs.forEach((img, index) => {
-      const num  = String(img.scene_number || index + 1).padStart(3, '0');
-      const desc = (img.scene_description || '')
-        .replace(/,/g, ' ')
-        .replace(/[\\/:*?"<>|]/g, '')
-        .trim()
-        .slice(0, 80);
-      const filename = desc
-        ? `${get('save-prefix').value || 'scene_'}${num}_${desc}.png`
-        : `${get('save-prefix').value || 'scene_'}${num}.png`;
+   let count = 0;
+    imgs.forEach((img) => {
+      // استخدم الاسم المخزن في capturedImages مباشرة
+      const filename = img.filename || (() => {
+        const prefix = get('save-prefix').value || 'scene_';
+        const num  = String(img.scene_number || 1).padStart(3, '0');
+        const desc = (img.scene_description || '')
+          .replace(/,/g, ' ')
+          .replace(/[\\/:*?"<>|]/g, '')
+          .trim()
+          .slice(0, 80);
+        return desc ? `${prefix}${num}_${desc}.png` : `${prefix}${num}.png`;
+      })();
 
       chrome.runtime.sendMessage({
         type:     'MANUAL_DOWNLOAD',

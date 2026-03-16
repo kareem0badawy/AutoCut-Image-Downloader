@@ -284,7 +284,8 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
         <span id="flow-collapse-icon" style="font-size:11px;color:var(--muted2);transition:transform .2s">▼</span>
         <div class="card-title" style="margin:0">⚙️ إعدادات Flow</div>
       </div>
-      <div style="display:flex;gap:6px;align-items:center" onclick="event.stopPropagation()">
+      <!-- <div style="display:flex;gap:6px;align-items:center" onclick="event.stopPropagation()"> -->
+      <div id="flow-toggle-wrap" style="display:flex;gap:6px;align-items:center">
         <label class="toggle-wrap" title="تفعيل/تعطيل الإعدادات">
           <input type="checkbox" id="flow-settings-toggle">
           <span class="toggle-slider"></span>
