@@ -1,50 +1,105 @@
-﻿// AutoCut content script v1.0.0
-console.log("AutoCut v1.0.0 ready");
+﻿// AutoCut content script v2.2
+console.log("AutoCut v2.2 ready");
 
 // ══════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════
-let controlMode = null;
+let controlMode   = null;
 let selectedTiles = new Set();
-let floatingBar = null;
-let observer = null;
+let floatingBar   = null;
+let observer      = null;
 
 // ══════════════════════════════════════════════════
-//  HELPER — context check
+//  HELPERS
 // ══════════════════════════════════════════════════
 function isExtensionAlive() {
-  try {
-    return !!chrome.runtime?.id;
-  } catch {
-    return false;
+  try { return !!chrome.runtime?.id; } catch { return false; }
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function buildFilename(prefix, num, desc) {
+  const n = String(num).padStart(3, "0");
+  const d = (desc || "")
+    .replace(/,/g, " ")
+    .replace(/[<>:"/\\|?*]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return d ? `${prefix}${n}_${d}.png` : `${prefix}${n}.png`;
+}
+
+// ══════════════════════════════════════════════════
+//  TILE RESOLUTION
+//
+//  Flow DOM wraps every image in two nested elements
+//  that share the same data-tile-id:
+//
+//    outer [data-tile-id="fe_id_abc"]   ← no img directly
+//      └── inner [data-tile-id="fe_id_abc"]  ← has <img>
+//
+//  Strategy: the real (inner) tile is the one that:
+//    1. Contains img[alt="صورة تم إنشاؤها"]
+//    2. Has NO descendant [data-tile-id]
+//
+//  This is DOM-structure-agnostic — works regardless
+//  of how many wrapper divs sit between outer & inner.
+// ══════════════════════════════════════════════════
+function getImageTile(el) {
+  // Given any element with data-tile-id, walk DOWN to find
+  // the innermost tile that directly owns the image.
+  const nested = el.querySelector("[data-tile-id]");
+  if (nested) return getImageTile(nested);   // recurse into deeper tile
+  return el.querySelector('img[alt="صورة تم إنشاؤها"]') ? el : null;
+}
+
+// Returns a stable, ordered, deduplicated list of real image tiles.
+function getInnerTiles() {
+  const seen   = new Set();
+  const result = [];
+  const scope  = document.querySelector('[data-testid="virtuoso-item-list"]') || document.body;
+
+  for (const el of scope.querySelectorAll("[data-tile-id]")) {
+    const inner = getImageTile(el);
+    if (!inner) continue;
+    const id = inner.getAttribute("data-tile-id");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(inner);
   }
+  return result;
+}
+
+// Safe lookup by ID — always resolves to the inner tile.
+function getTileById(tileId) {
+  const all = document.querySelectorAll(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  for (const el of all) {
+    const inner = getImageTile(el);
+    if (inner) return inner;
+  }
+  return null;
 }
 
 // ══════════════════════════════════════════════════
 //  MESSAGE LISTENER
 // ══════════════════════════════════════════════════
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!isExtensionAlive()) return;
-
-  if (msg.type === "CAPTURE_IMAGES") {
-    const images = captureImagesFromDOM();
-    sendResponse({ images });
-  }
-  if (msg.type === "INJECT_CONTROL") {
-    injectFloatingBar();
-    sendResponse({ ok: true });
-  }
+  if (msg.type === "CAPTURE_IMAGES")  { sendResponse({ images: captureImagesFromDOM() }); }
+  if (msg.type === "INJECT_CONTROL")  { injectFloatingBar(); sendResponse({ ok: true }); }
   return true;
 });
 
 // ══════════════════════════════════════════════════
-//  FLOATING BAR — INJECT
+//  FLOATING BAR
 // ══════════════════════════════════════════════════
 function injectFloatingBar() {
   if (floatingBar) return;
 
   const style = document.createElement("style");
-  style.id = "autocut-style";
+  style.id    = "autocut-style";
   style.textContent = `
     #autocut-bar {
       position: fixed; bottom: 24px; right: 24px; z-index: 999999;
@@ -66,8 +121,8 @@ function injectFloatingBar() {
       cursor: pointer; transition: all .15s; white-space: nowrap;
     }
     .ac-mode-btn:hover { background: #334155; color: #f1f5f9; }
-    .ac-mode-btn.active-dl { background: rgba(34,197,94,.15); color: #22c55e; border-color: #22c55e; }
-    .ac-mode-btn.active-del { background: rgba(239,68,68,.15); color: #ef4444; border-color: #ef4444; }
+    .ac-mode-btn.active-dl  { background: rgba(34,197,94,.15); color: #22c55e; border-color: #22c55e; }
+    .ac-mode-btn.active-del { background: rgba(239,68,68,.15);  color: #ef4444; border-color: #ef4444; }
     #autocut-action-bar {
       background: #1e293b; border: 1px solid #334155; border-radius: 999px;
       padding: 7px 14px; display: none; align-items: center; gap: 10px;
@@ -92,8 +147,9 @@ function injectFloatingBar() {
       pointer-events: none; transition: all .15s; z-index: 10;
     }
     [data-tile-id].ac-sel-dl::after  { background: rgba(34,197,94,.25); border: 2.5px solid #22c55e; }
-    [data-tile-id].ac-sel-del::after { background: rgba(239,68,68,.25); border: 2.5px solid #ef4444; }
-    [data-tile-id].ac-sel-dl .ac-check, [data-tile-id].ac-sel-del .ac-check { display: flex !important; }
+    [data-tile-id].ac-sel-del::after { background: rgba(239,68,68,.25);  border: 2.5px solid #ef4444; }
+    [data-tile-id].ac-sel-dl .ac-check,
+    [data-tile-id].ac-sel-del .ac-check { display: flex !important; }
     .ac-check {
       display: none; position: absolute; top: 6px; right: 6px;
       width: 20px; height: 20px; border-radius: 50%;
@@ -112,7 +168,7 @@ function injectFloatingBar() {
       <span id="autocut-count">0 محدد</span>
       <div class="ac-divider"></div>
       <button class="ac-exec-btn dl" id="ac-exec-btn">📥 تحميل</button>
-      <button class="ac-cancel-btn"  id="ac-cancel-btn">✕ إلغاء</button>
+      <button class="ac-cancel-btn" id="ac-cancel-btn">✕ إلغاء</button>
     </div>
     <div id="autocut-pill">
       <div id="autocut-logo">✂️ Auto<span>Cut</span></div>
@@ -125,10 +181,10 @@ function injectFloatingBar() {
   `;
   document.body.appendChild(floatingBar);
 
-  document.getElementById("ac-dl-btn").addEventListener("click", () => toggleMode("download"));
-  document.getElementById("ac-del-btn").addEventListener("click", () => toggleMode("delete"));
+  document.getElementById("ac-dl-btn").addEventListener("click",    () => toggleMode("download"));
+  document.getElementById("ac-del-btn").addEventListener("click",   () => toggleMode("delete"));
   document.getElementById("ac-cancel-btn").addEventListener("click", cancelSelection);
-  document.getElementById("ac-exec-btn").addEventListener("click", executeAction);
+  document.getElementById("ac-exec-btn").addEventListener("click",   executeAction);
 
   startObserver();
 }
@@ -142,24 +198,16 @@ function toggleMode(mode) {
   controlMode = mode;
   selectedTiles.clear();
 
-  const dlBtn     = document.getElementById("ac-dl-btn");
-  const delBtn    = document.getElementById("ac-del-btn");
+  document.getElementById("ac-dl-btn").className  = "ac-mode-btn" + (mode === "download" ? " active-dl" : "");
+  document.getElementById("ac-del-btn").className = "ac-mode-btn" + (mode === "delete"   ? " active-del" : "");
+
   const selAllBtn = document.getElementById("ac-selall-btn");
-
-  dlBtn.className  = "ac-mode-btn" + (mode === "download" ? " active-dl" : "");
-  delBtn.className = "ac-mode-btn" + (mode === "delete"   ? " active-del" : "");
-
   selAllBtn.style.display = "inline-block";
   selAllBtn.className = "ac-mode-btn" + (mode === "download" ? " active-dl" : " active-del");
 
   const execBtn = document.getElementById("ac-exec-btn");
-  if (mode === "download") {
-    execBtn.textContent = "📥 تحميل";
-    execBtn.className   = "ac-exec-btn dl";
-  } else {
-    execBtn.textContent = "🗑️ حذف";
-    execBtn.className   = "ac-exec-btn del";
-  }
+  execBtn.textContent = mode === "download" ? "📥 تحميل" : "🗑️ حذف";
+  execBtn.className   = mode === "download" ? "ac-exec-btn dl" : "ac-exec-btn del";
 
   attachTileListeners();
   updateActionBar();
@@ -168,79 +216,15 @@ function toggleMode(mode) {
 // ══════════════════════════════════════════════════
 //  TILE LISTENERS
 // ══════════════════════════════════════════════════
-// ✅ Helper: جيب فقط الـ inner tiles
-// الـ DOM فيه outer + inner لكل صورة بنفس data-tile-id
-// الـ inner هو اللي مباشرة فيه img، والـ outer هو parent له
-function getInnerTiles() {
-  const scope = document.querySelector('[data-testid="virtuoso-item-list"]') || document;
-  const seen = new Set();
-
-  return Array.from(scope.querySelectorAll('[data-tile-id]')).filter((tile) => {
-    const img = tile.querySelector('img[alt="صورة تم إنشاؤها"]');
-    if (!img) return false;
-
-    // لو فيه child تاني data-tile-id يبقى ده outer مش inner
-    const nestedTile = Array.from(tile.children).some(
-      (child) => child.hasAttribute && child.hasAttribute('data-tile-id')
-    );
-    if (nestedTile) return false;
-
-    const tileId = tile.getAttribute('data-tile-id');
-    if (!tileId || seen.has(tileId)) return false;
-    seen.add(tileId);
-    return true;
-  });
-}
-
-function findInnerTileById(tileId) {
-  return getInnerTiles().find(
-    (tile) => tile.getAttribute('data-tile-id') === tileId
-  ) || null;
-}
-
 function attachTileListeners() {
-  const tiles = getInnerTiles();
-  tiles.forEach((tile, index) => {
+  getInnerTiles().forEach((tile, index) => {
     if (tile.dataset.acListened === "1") return;
     tile.dataset.acListened = "1";
-    tile.dataset.acIndex = index + 1;
-
-    let bestDesc = '';
-
-    // ✅ 1. دور على text nodes مباشرة جوا الـ tile (مش img أو button)
-    const skipTags = new Set(['IMG', 'BUTTON', 'INPUT', 'I', 'SVG']);
-    const allElements = tile.querySelectorAll('*');
-    for (const el of allElements) {
-      if (skipTags.has(el.tagName)) continue; // ✅ تجاهل img وbuttons
-      
-      // جرب textContent
-      const text = el.textContent?.trim() || '';
-      if (text.length > 15 && !text.includes('صورة تم') && !text.includes('more_vert') && !text.includes('delete')) {
-        bestDesc = text;
-        break;
-      }
-    }
-
-    // ✅ 2. جرب aria-label بس مش على img أو button
-    if (!bestDesc) {
-      const ariaEls = tile.querySelectorAll('[aria-label]');
-      for (const el of ariaEls) {
-        if (skipTags.has(el.tagName)) continue; // ✅ تجاهل img
-        const text = el.getAttribute('aria-label')?.trim() || '';
-        if (text.length > 15 && !text.includes('صورة تم')) {
-          bestDesc = text;
-          break;
-        }
-      }
-    }
-
-    // ✅ 3. Fallback: capturedImages من storage (هيتحط لو لقيناه)
-    tile.dataset.acDesc = bestDesc;
-    tile.dataset.acSceneNum = index + 1; // دايما index fallback
+    tile.dataset.acIndex    = String(index);   // 0-based DOM index
 
     if (!tile.querySelector(".ac-check")) {
       const check = document.createElement("div");
-      check.className = "ac-check";
+      check.className  = "ac-check";
       check.textContent = "✓";
       tile.appendChild(check);
     }
@@ -248,8 +232,6 @@ function attachTileListeners() {
     tile.addEventListener("click", onTileClick, true);
   });
 }
-
-
 
 function onTileClick(e) {
   if (!controlMode) return;
@@ -264,20 +246,18 @@ function onTileClick(e) {
     tile.classList.remove("ac-sel-dl", "ac-sel-del");
   } else {
     selectedTiles.add(tileId);
-    tile.classList.remove("ac-sel-dl", "ac-sel-del");
     tile.classList.add(controlMode === "download" ? "ac-sel-dl" : "ac-sel-del");
   }
   updateActionBar();
 }
 
 // ══════════════════════════════════════════════════
-//  ACTION BAR UPDATE
+//  ACTION BAR
 // ══════════════════════════════════════════════════
 function updateActionBar() {
   const bar   = document.getElementById("autocut-action-bar");
   const count = document.getElementById("autocut-count");
   if (!bar || !count) return;
-
   if (selectedTiles.size > 0) {
     bar.classList.add("visible");
     count.textContent = `${selectedTiles.size} محدد`;
@@ -287,117 +267,90 @@ function updateActionBar() {
 }
 
 // ══════════════════════════════════════════════════
-//  EXECUTE ACTION — ✅ نسخة واحدة فقط
+//  EXECUTE ACTION
 // ══════════════════════════════════════════════════
 async function executeAction() {
   if (!selectedTiles.size || !controlMode) return;
   if (!isExtensionAlive()) { showContextInvalidatedWarning(); return; }
 
-  // ✅ جيب scenes وcapturedImages من storage
-  let allScenes = [];
-  let capturedImages = [];
-  try {
-    const storageData = await new Promise((resolve, reject) => {
-      try { chrome.storage.local.get(["capturedImages", "scenes"], resolve); }
-      catch (e) { reject(e); }
-    });
-    capturedImages = storageData.capturedImages || [];
-    allScenes      = storageData.scenes         || [];
-  } catch {
-    capturedImages = [];
-    allScenes = [];
-  }
+  // Load everything from storage in one call
+  const storage = await new Promise(resolve =>
+    chrome.storage.local.get(["capturedImages", "scenes", "prefix"], resolve)
+  ).catch(() => ({}));
 
-  // ✅ جيب فقط الـ inner tiles المرتبة (مش الـ outer wrappers)
-  const allTilesInOrder = getInnerTiles();
+  const capturedImages = storage.capturedImages || [];
+  const allScenes      = storage.scenes         || [];
+  const prefix         = storage.prefix         || "scene_";
+
+  // Get ordered inner tiles snapshot for index mapping
+  const orderedTiles = getInnerTiles();
 
   const selectedData = [];
-  const seen = new Set();
-  const storagePrefix = await new Promise(resolve => {
-    try { chrome.storage.local.get(['prefix'], r => resolve(r.prefix || 'scene_')); }
-    catch { resolve('scene_'); }
-  });
+  const seen         = new Set();
 
   for (const tileId of selectedTiles) {
-    const tile = findInnerTileById(tileId);
-    if (!tile) continue;
     if (seen.has(tileId)) continue;
     seen.add(tileId);
+
+    const tile = getTileById(tileId);
+    if (!tile) continue;
 
     const img = tile.querySelector('img[alt="صورة تم إنشاؤها"]');
     if (!img) continue;
 
-    const rawSrc  = img.getAttribute('src') || img.src;
-    const fullUrl = rawSrc.startsWith('http') ? rawSrc : `${location.origin}${rawSrc}`;
+    const rawSrc = img.getAttribute("src") || img.src;
+    const url    = rawSrc.startsWith("http") ? rawSrc : `${location.origin}${rawSrc}`;
 
-    // ✅ IMPORTANT: ماينفعش نطابق بعد قص query string
-    // لأن كل الصور عندها نفس base path تقريبًا: /fx/api/trpc/media.getMediaUrlRedirect
-    // فكان كل Tile بيماتش أول captured image => نفس الاسم scene_001...
-    const captured = capturedImages.find(c => (c.url || '') === fullUrl);
+    // ── Priority 1: exact URL match in capturedImages (from a Queue run) ──
+    const captured = capturedImages.find(c => c.url === url);
 
-    // ✅ 2. لو مفيش match — استخدم position الـ tile في الـ DOM كـ scene index
-    let sceneNumber = 1;
-    let sceneDesc   = '';
-    let filename    = '';
+    let sceneNumber, sceneDesc, filename;
 
     if (captured) {
-      // الأفضل — بيانات كاملة من الـ Queue
       sceneNumber = captured.scene_number;
       sceneDesc   = captured.scene_description;
       filename    = captured.filename;
     } else {
-      // ✅ position الـ tile = index في allTilesInOrder (0-based → +1)
-      const domIndex = allTilesInOrder.indexOf(tile); // 0-based
-      const sceneIdx = domIndex >= 0 ? domIndex : 0;  // fallback 0
+      // ── Priority 2: DOM position → allScenes index ──
+      const domIndex   = orderedTiles.indexOf(tile);  // reliable because orderedTiles = getInnerTiles()
+      const sceneIndex = domIndex >= 0 ? domIndex : 0;
+      const scene      = allScenes[sceneIndex];       // undefined if no JSON uploaded yet
 
-      // ✅ جيب الـ scene المناظر من allScenes (بالـ index مش بالـ scene_number)
-      const matchedScene = (allScenes.length > sceneIdx) ? allScenes[sceneIdx] : null;
-
-      if (matchedScene) {
-        sceneNumber = matchedScene.scene_number;
-        sceneDesc   = matchedScene.scene_description;
-      } else {
-        sceneNumber = sceneIdx + 1;
-        sceneDesc   = tile.dataset.acDesc || '';
-      }
+      sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
+      sceneDesc   = scene ? scene.scene_description : "";
+      filename    = buildFilename(prefix, sceneNumber, sceneDesc);
     }
 
-    // ✅ ابني الـ filename هنا في content.js عشان كل صورة تاخد اسم فريد
-    if (!filename) {
-      const num  = String(sceneNumber).padStart(3, '0');
-      const desc = (sceneDesc || '')
-        .replace(/,/g, ' ')
-        .replace(/[<>:"/\\|?*]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 80);
-      filename = desc ? `${storagePrefix}${num}_${desc}.png` : `${storagePrefix}${num}.png`;
-    }
-
-    selectedData.push({
-      id:                tileId,
-      url:               fullUrl,
-      scene_number:      sceneNumber,
-      scene_description: sceneDesc,
-      filename:          filename,
-    });
+    selectedData.push({ id: tileId, url, scene_number: sceneNumber, scene_description: sceneDesc, filename });
   }
 
   if (!selectedData.length) { cancelSelection(); return; }
 
-  if (controlMode === 'download') {
+  if (controlMode === "download") {
     try {
-      chrome.runtime.sendMessage({
-        type: 'EXECUTE_SELECTION', action: 'download', images: selectedData
-      });
+      chrome.runtime.sendMessage({ type: "EXECUTE_SELECTION", action: "download", images: selectedData });
     } catch { showContextInvalidatedWarning(); return; }
-    cancelSelection();
   } else {
-    try {
-      await deleteSelectedTiles(selectedData.map(d => d.id));
-    } catch { showContextInvalidatedWarning(); return; }
-    cancelSelection();
+    await deleteSelectedTiles(selectedData.map(d => d.id));
   }
+
+  cancelSelection();
+}
+
+// ══════════════════════════════════════════════════
+//  CANCEL
+// ══════════════════════════════════════════════════
+function cancelSelection() {
+  controlMode = null;
+  selectedTiles.clear();
+  document.querySelectorAll("[data-tile-id]").forEach(t => t.classList.remove("ac-sel-dl", "ac-sel-del"));
+  const dlBtn     = document.getElementById("ac-dl-btn");
+  const delBtn    = document.getElementById("ac-del-btn");
+  const selAllBtn = document.getElementById("ac-selall-btn");
+  if (dlBtn)     dlBtn.className    = "ac-mode-btn";
+  if (delBtn)    delBtn.className   = "ac-mode-btn";
+  if (selAllBtn) selAllBtn.style.display = "none";
+  updateActionBar();
 }
 
 // ══════════════════════════════════════════════════
@@ -405,8 +358,7 @@ async function executeAction() {
 // ══════════════════════════════════════════════════
 function showContextInvalidatedWarning() {
   if (floatingBar) { floatingBar.remove(); floatingBar = null; }
-
-  const warn = document.createElement('div');
+  const warn = document.createElement("div");
   warn.style.cssText = `
     position: fixed; bottom: 24px; right: 24px; z-index: 9999999;
     background: #7f1d1d; border: 1px solid #ef4444; border-radius: 12px;
@@ -433,10 +385,9 @@ function showContextInvalidatedWarning() {
 async function deleteSelectedTiles(tileIds) {
   showDeleteProgress(0, tileIds.length);
   for (let i = 0; i < tileIds.length; i++) {
-    const tile = findInnerTileById(tileIds[i]);
+    const tile = getTileById(tileIds[i]);
     if (!tile) { showDeleteProgress(i + 1, tileIds.length); continue; }
-    const success = await deleteSingleTile(tile);
-    if (!success) console.warn(`AutoCut: فشل حذف tile ${tileIds[i]}`);
+    await deleteSingleTile(tile);
     showDeleteProgress(i + 1, tileIds.length);
     await sleep(600);
   }
@@ -451,9 +402,9 @@ async function deleteSingleTile(tile) {
     const moreBtn = tile.querySelector('button[aria-haspopup="menu"]');
     if (!moreBtn) { console.warn("AutoCut: مش لاقي زرار الـ 3 نقط"); return false; }
 
-    moreBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles:true, cancelable:true, pointerId:1, isPrimary:true, button:0, buttons:1 }));
+    moreBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }));
     moreBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    moreBtn.dispatchEvent(new PointerEvent("pointerup",  { bubbles:true, cancelable:true, pointerId:1, isPrimary:true, button:0, buttons:0 }));
+    moreBtn.dispatchEvent(new PointerEvent("pointerup",  { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 0 }));
     moreBtn.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true }));
     moreBtn.dispatchEvent(new MouseEvent("click",    { bubbles: true }));
     await sleep(400);
@@ -467,7 +418,6 @@ async function deleteSingleTile(tile) {
     deleteBtn.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true }));
     deleteBtn.dispatchEvent(new MouseEvent("click",    { bubbles: true }));
     await sleep(250);
-
     return true;
   } catch (e) {
     console.error("AutoCut delete error:", e);
@@ -475,45 +425,14 @@ async function deleteSingleTile(tile) {
   }
 }
 
-// ✅ نسخة واحدة فقط من findDeleteBtn
 function findDeleteBtn() {
   const menu = document.querySelector('[role="menu"][data-state="open"]');
   if (!menu) return null;
-  const items = menu.querySelectorAll('[role="menuitem"]');
-  for (const item of items) {
+  for (const item of menu.querySelectorAll('[role="menuitem"]')) {
     const icon = item.querySelector("i");
-    const text = item.textContent || "";
-    if (icon && icon.textContent.trim() === "delete" && text.includes("حذف")) return item;
+    if (icon && icon.textContent.trim() === "delete" && item.textContent.includes("حذف")) return item;
   }
   return null;
-}
-
-function findMoreVertBtn(tile) {
-  const btns = tile.querySelectorAll("button");
-  for (const btn of btns) {
-    const icon = btn.querySelector("i");
-    if (icon && icon.textContent.trim() === "more_vert") return btn;
-  }
-  return tile.querySelector('[aria-label="خيارات إضافية"]') || null;
-}
-
-function waitForDeleteButton(timeout = 800) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const check = () => {
-      const btns = document.querySelectorAll('[role="menuitem"]');
-      for (const btn of btns) {
-        const icon = btn.querySelector("i");
-        const text = btn.textContent || "";
-        if ((icon && icon.textContent.trim() === "delete") || text.includes("حذف")) {
-          resolve(btn); return;
-        }
-      }
-      if (Date.now() - start < timeout) requestAnimationFrame(check);
-      else resolve(null);
-    };
-    check();
-  });
 }
 
 function showDeleteProgress(done, total) {
@@ -538,36 +457,12 @@ function hideDeleteProgress() {
   if (bar) { bar.textContent = "✓ تم الحذف"; setTimeout(() => bar.remove(), 1500); }
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// ══════════════════════════════════════════════════
-//  CANCEL
-// ══════════════════════════════════════════════════
-function cancelSelection() {
-  controlMode = null;
-  selectedTiles.clear();
-  document.querySelectorAll("[data-tile-id]").forEach(tile => {
-    tile.classList.remove("ac-sel-dl", "ac-sel-del");
-  });
-  const dlBtn     = document.getElementById("ac-dl-btn");
-  const delBtn    = document.getElementById("ac-del-btn");
-  const selAllBtn = document.getElementById("ac-selall-btn");
-  if (dlBtn)     dlBtn.className = "ac-mode-btn";
-  if (delBtn)    delBtn.className = "ac-mode-btn";
-  if (selAllBtn) selAllBtn.style.display = "none";
-  updateActionBar();
-}
-
 // ══════════════════════════════════════════════════
 //  MUTATION OBSERVER
 // ══════════════════════════════════════════════════
 function startObserver() {
   const target = document.querySelector('[data-testid="virtuoso-item-list"]') || document.body;
-  observer = new MutationObserver(() => {
-    if (controlMode) attachTileListeners();
-  });
+  observer = new MutationObserver(() => { if (controlMode) attachTileListeners(); });
   observer.observe(target, { childList: true, subtree: true });
 }
 
@@ -575,30 +470,21 @@ function startObserver() {
 //  CAPTURE IMAGES FROM DOM
 // ══════════════════════════════════════════════════
 function captureImagesFromDOM() {
-  const items = getInnerTiles();
-  const images = [];
-
-  items.forEach((tile, index) => {
+  return getInnerTiles().map((tile, index) => {
     const img    = tile.querySelector('img[alt="صورة تم إنشاؤها"]');
     const anchor = tile.querySelector("a[href]");
-    if (!img) return;
+    const rawSrc = img.getAttribute("src") || img.src;
+    const url    = rawSrc.startsWith("http") ? rawSrc : `${location.origin}${rawSrc}`;
+    const href   = anchor?.getAttribute("href") || "";
+    const uuid   = href.split("/").pop() || tile.getAttribute("data-tile-id") || `img_${index}`;
 
-    const rawSrc  = img.getAttribute("src") || img.src;
-    const fullUrl = rawSrc.startsWith("http") ? rawSrc : `${location.origin}${rawSrc}`;
-    const tileId  = tile.getAttribute("data-tile-id") || `img_${index}`;
-    const href    = anchor?.getAttribute("href") || "";
-    const hrefParts  = href.split("/");
-    const sceneUuid  = hrefParts[hrefParts.length - 1] || tileId;
-
-    images.push({
-      id:                tileId,
-      url:               fullUrl,
+    return {
+      id:                tile.getAttribute("data-tile-id") || `img_${index}`,
+      url,
       filename:          `image_${String(index + 1).padStart(3, "0")}.png`,
       scene_number:      index + 1,
-      scene_description: sceneUuid,
+      scene_description: uuid,
       downloaded:        false,
-    });
+    };
   });
-
-  return images;
 }
