@@ -55,6 +55,31 @@ function buildFolder() {
   return project ? `AutoCut/${project}` : 'AutoCut';
 }
 
+// ══════════════════════════════════════════════════
+//  COLLAPSE LOGIC
+// ══════════════════════════════════════════════════
+
+// Flow Settings — مفتوح بالـ default
+let flowCollapsed = false;
+document.getElementById('flow-settings-header').addEventListener('click', () => {
+  flowCollapsed = !flowCollapsed;
+  const body = document.getElementById('flow-settings-collapse');
+  const icon = document.getElementById('flow-collapse-icon');
+  body.style.maxHeight = flowCollapsed ? '0' : '600px';
+  icon.style.transform = flowCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
+});
+
+// Save Settings — مقفول بالـ default
+let saveCollapsed = true;
+document.getElementById('save-settings-header').addEventListener('click', () => {
+  saveCollapsed = !saveCollapsed;
+  const body = document.getElementById('save-settings-collapse');
+  const icon = document.getElementById('save-collapse-icon');
+  body.style.maxHeight = saveCollapsed ? '0' : '400px';
+  icon.style.transform = saveCollapsed ? 'rotate(0deg)' : 'rotate(90deg)';
+});
+
+
 // ── Auto-download toggle ───────────────────────────
 get('auto-download-toggle').addEventListener('change', e => {
   const on = e.target.checked;
@@ -79,7 +104,7 @@ chrome.storage.local.get(['scenes','doneCount','failCount','prefix','saveProject
   if (r.saveProject) get('save-project').value = r.saveProject;
   updatePathPreview();
 
-  if (r.autoDownload === false) {
+  if (r.autoDownload !== true) {
     get('auto-download-toggle').checked = false;
     get('auto-dl-hint').textContent = 'موقف — الصور بتتجمع في تاب الصور فقط، تحميل يدوي';
   }
@@ -208,7 +233,6 @@ get('inject-control-btn').addEventListener('click', async () => {
   addLog('info', '🎯 تم تفعيل الكنترول في الصفحة');
 });
 
-
 // ── Retry Failed ───────────────────────────────────
 get('retry-btn').addEventListener('click', async () => {
   const failed = scenes.filter(s => s._failed);
@@ -216,7 +240,7 @@ get('retry-btn').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) { addLog('err', 'افتح Google Flow الأول'); return; }
   const prefix = get('save-prefix').value || 'scene_';
-  const folder = buildFolder(); // ✅ مش save-folder
+  const folder = buildFolder();
   get('start-btn').style.display = 'none';
   get('stop-btn').style.display = 'block';
   chrome.runtime.sendMessage({ type: 'RETRY_FAILED', scenes: failed, prefix, folder, tabId: tab.id });
@@ -239,7 +263,7 @@ get('export-btn').addEventListener('click', () => {
     };
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const folder = buildFolder(); // ✅ مش save-folder
+    const folder = buildFolder();
     chrome.downloads.download({ url, filename: `${folder}/report_${Date.now()}.json`, saveAs: false });
     addLog('ok', 'تم تصدير التقرير ✓');
   });
@@ -278,20 +302,19 @@ get('desel-all-btn').addEventListener('click', () => {
 
 get('dl-selected-btn').addEventListener('click', () => {
   if (!selectedImages.size) return;
-  
+
   const folder = buildFolder();
-  
+
   chrome.storage.local.get(['capturedImages'], r => {
     const imgs = (r.capturedImages || []).filter(img => selectedImages.has(img.id));
-    
+
     if (!imgs.length) {
       addLog('err', 'مفيش صور محددة للتحميل');
       return;
     }
-    
+
     let count = 0;
     imgs.forEach((img, index) => {
-      // بناء اسم الملف الصح
       const num  = String(img.scene_number || index + 1).padStart(3, '0');
       const desc = (img.scene_description || '')
         .replace(/,/g, ' ')
@@ -301,19 +324,18 @@ get('dl-selected-btn').addEventListener('click', () => {
       const filename = desc
         ? `${get('save-prefix').value || 'scene_'}${num}_${desc}.png`
         : `${get('save-prefix').value || 'scene_'}${num}.png`;
-      
+
       chrome.runtime.sendMessage({
         type:     'MANUAL_DOWNLOAD',
         url:      img.url,
         filename: filename,
-        folder:   folder          // ✅ بيستخدم buildFolder()
+        folder:   folder
       });
       count++;
     });
-    
+
     addLog('ok', `📥 بدأ تحميل ${count} صورة → Downloads/${folder}/`);
-    
-    // علّم الصور كـ downloaded
+
     const all = r.capturedImages || [];
     all.forEach(img => {
       if (selectedImages.has(img.id)) img.downloaded = true;
@@ -325,7 +347,6 @@ get('dl-selected-btn').addEventListener('click', () => {
     });
   });
 });
-
 
 get('del-selected-btn').addEventListener('click', () => {
   if (!selectedImages.size) return;
@@ -364,13 +385,13 @@ function renderGallery() {
     }
     grid.innerHTML = '';
     imgs.forEach(img => {
-      const isSelected = selectedImages.has(img.id);
-      const selClass = isSelected ? (galleryMode === 'download' ? 'sel-download' : 'sel-delete') : '';
+      const isSelected  = selectedImages.has(img.id);
+      const selClass    = isSelected ? (galleryMode === 'download' ? 'sel-download' : 'sel-delete') : '';
       const overlayIcon = galleryMode === 'download' ? '📥' : '🗑️';
       const item = document.createElement('div');
-      item.className = `gallery-item ${selClass}`;
+      item.className  = `gallery-item ${selClass}`;
       item.dataset.id = img.id;
-      item.innerHTML = `
+      item.innerHTML  = `
         <img src="${img.url}" alt="Scene ${img.scene_number}" loading="lazy">
         <div class="overlay">${overlayIcon}</div>
         ${img.downloaded ? '<div class="downloaded-badge">✓ تم</div>' : ''}
@@ -403,12 +424,12 @@ function renderSceneList() {
   }
   list.innerHTML = '';
   scenes.forEach(scene => {
-    const status = scene._done ? 'done' : scene._failed ? 'failed' : scene._skipped ? 'skipped' : 'pending';
+    const status   = scene._done ? 'done' : scene._failed ? 'failed' : scene._skipped ? 'skipped' : 'pending';
     const badgeMap = { done:'badge-done', failed:'badge-failed', pending:'badge-pending', skipped:'badge-skipped', running:'badge-running' };
     const labelMap = { done:'✓ تم', failed:'✗ فشل', pending:'⏳', skipped:'⏭', running:'⚡' };
     const item = document.createElement('div');
     item.className = `scene-item ${scene._done ? 'done' : scene._failed ? 'failed' : ''}`;
-    item.id = 'scene-item-' + scene.scene_number;
+    item.id        = 'scene-item-' + scene.scene_number;
     item.innerHTML = `
       <span class="scene-num">#${String(scene.scene_number).padStart(3,'0')}</span>
       <span class="scene-desc">${(scene.scene_description||'بدون وصف').slice(0,50)}</span>
@@ -440,7 +461,7 @@ function updateSceneBadge(sceneNumber, status) {
   if (badge) {
     const bMap = { running:'badge-running', done:'badge-done', failed:'badge-failed' };
     const lMap = { running:'⚡', done:'✓ تم', failed:'✗ فشل' };
-    badge.className = 'scene-badge ' + bMap[status];
+    badge.className   = 'scene-badge ' + bMap[status];
     badge.textContent = lMap[status];
   }
 }
@@ -450,7 +471,7 @@ function updateSceneBadge(sceneNumber, status) {
 // ══════════════════════════════════════════════════
 function renderHistory() {
   chrome.storage.local.get(['sessionHistory'], r => {
-    const list = get('history-list');
+    const list    = get('history-list');
     const history = r.sessionHistory || [];
     if (!history.length) {
       list.innerHTML = '<div class="history-empty">مفيش جلسات سابقة</div>';
@@ -458,9 +479,9 @@ function renderHistory() {
     }
     list.innerHTML = '';
     history.forEach(h => {
-      const d = new Date(h.date);
+      const d       = new Date(h.date);
       const dateStr = d.toLocaleDateString('ar-EG', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
-      const item = document.createElement('div');
+      const item    = document.createElement('div');
       item.className = 'history-item';
       item.innerHTML = `
         <div class="history-date">${dateStr}</div>
@@ -494,7 +515,8 @@ function addLog(type, msg) {
 }
 function _addLogDOM(type, msg) {
   const d = document.createElement('div');
-  d.className = type; d.textContent = msg;
+  d.className   = type;
+  d.textContent = msg;
   get('log').appendChild(d);
   get('log').scrollTop = get('log').scrollHeight;
   get('log').style.display = 'block';
@@ -502,29 +524,246 @@ function _addLogDOM(type, msg) {
 
 // ── Clear All ──────────────────────────────────────
 get('clear-btn').addEventListener('click', () => get('confirm-overlay').classList.add('show'));
-get('confirm-no').addEventListener('click', () => get('confirm-overlay').classList.remove('show'));
+get('confirm-no').addEventListener('click',  () => get('confirm-overlay').classList.remove('show'));
 get('confirm-yes').addEventListener('click', () => {
   chrome.storage.local.clear(() => {
     scenes = []; doneCount = 0; failCount = 0;
     get('upload-area').classList.remove('loaded');
-    get('upload-count').textContent = '';
-    get('stat-total').textContent = '0';
-    get('stat-done').textContent = '0';
-    get('stat-fail').textContent = '0';
-    get('log').innerHTML = ''; get('log').style.display = 'none';
+    get('upload-count').textContent  = '';
+    get('stat-total').textContent    = '0';
+    get('stat-done').textContent     = '0';
+    get('stat-fail').textContent     = '0';
+    get('log').innerHTML             = '';
+    get('log').style.display         = 'none';
     get('progress-wrap').style.display = 'none';
-    get('progress-bar').style.width = '0%';
-    get('start-btn').disabled = true;
-    get('start-btn').style.display = 'block';
-    get('stop-btn').style.display = 'none';
-    get('retry-btn').disabled = true;
-    get('export-btn').disabled = true;
-    get('gallery-grid').innerHTML = '<div class="gallery-empty" style="grid-column:1/-1">الصور ستظهر هنا بعد التوليد</div>';
-    get('scene-list').innerHTML = '<div class="empty-state">ارفع prompts.json الأول</div>';
+    get('progress-bar').style.width    = '0%';
+    get('start-btn').disabled          = true;
+    get('start-btn').style.display     = 'block';
+    get('stop-btn').style.display      = 'none';
+    get('retry-btn').disabled          = true;
+    get('export-btn').disabled         = true;
+    get('gallery-grid').innerHTML      = '<div class="gallery-empty" style="grid-column:1/-1">الصور ستظهر هنا بعد التوليد</div>';
+    get('scene-list').innerHTML        = '<div class="empty-state">ارفع prompts.json الأول</div>';
     get('confirm-overlay').classList.remove('show');
     selectedImages.clear();
     get('save-project').value = '';
     updatePathPreview();
     applyTheme();
+    flowSettings = { mediaType: 'IMAGE', orientation: 'LANDSCAPE', count: 1, model: '', enabled: false };
+    _cachedModels = [];
+    get('model-btns').innerHTML = '<span style="font-size:11px;color:var(--muted2)">اضغط "تحديث" لجلب الموديلات من Flow</span>';
+    updateSettingsBtns();
+    updateFlowToggleUI();
   });
+});
+
+// ══════════════════════════════════════════════════
+//  FLOW SETTINGS
+// ══════════════════════════════════════════════════
+let flowSettings = { mediaType: 'IMAGE', orientation: 'LANDSCAPE', count: 1, model: '', enabled: false };
+
+chrome.storage.local.get(['flowSettings'], r => {
+  if (r.flowSettings) {
+    flowSettings = { ...flowSettings, ...r.flowSettings };
+  }
+  if (r.flowSettings?.enabled === undefined) {
+    flowSettings.enabled = false;
+  }
+  console.log('[AutoCut] flowSettings loaded:', flowSettings);
+  updateSettingsBtns();
+  updateFlowToggleUI();
+});
+
+function saveFlowSettings() {
+  chrome.storage.local.set({ flowSettings });
+  console.log('[AutoCut] flowSettings saved:', flowSettings);
+  updateSettingsBtns();
+}
+
+get('flow-settings-toggle').addEventListener('change', e => {
+  flowSettings.enabled = e.target.checked;
+  console.log('[AutoCut] toggle changed → enabled:', flowSettings.enabled);
+  saveFlowSettings();
+  updateFlowToggleUI();
+});
+
+function updateFlowToggleUI() {
+  const enabled = flowSettings.enabled === true;
+  get('flow-settings-toggle').checked             = enabled;
+  get('flow-settings-body').style.opacity         = enabled ? '1'    : '0.4';
+  get('flow-settings-body').style.pointerEvents   = enabled ? ''     : 'none';
+  get('flow-settings-body').style.display         = 'block';
+  get('flow-settings-disabled-msg').style.display = enabled ? 'none' : 'block';
+  console.log('[AutoCut] UI updated → enabled:', enabled);
+}
+
+function updateSettingsBtns() {
+  get('type-image-btn').className       = 'btn ' + (flowSettings.mediaType   === 'IMAGE'     ? 'btn-primary' : 'btn-secondary');
+  get('type-video-btn').className       = 'btn ' + (flowSettings.mediaType   === 'VIDEO'     ? 'btn-primary' : 'btn-secondary');
+  get('orient-landscape-btn').className = 'btn ' + (flowSettings.orientation === 'LANDSCAPE' ? 'btn-primary' : 'btn-secondary');
+  get('orient-portrait-btn').className  = 'btn ' + (flowSettings.orientation === 'PORTRAIT'  ? 'btn-primary' : 'btn-secondary');
+
+  document.querySelectorAll('[data-count]').forEach(btn => {
+    btn.className = 'btn ' + (parseInt(btn.dataset.count) === flowSettings.count ? 'btn-primary' : 'btn-secondary');
+  });
+
+  // الموديل — بس بنحدث الأزرار الموجودة بدون إعادة رسم
+  document.querySelectorAll('.model-btn').forEach(btn => {
+    const isActive    = btn.dataset.model === flowSettings.model;
+    btn.className     = 'sm-btn model-btn' + (isActive ? ' active-model' : '');
+    btn.style.cssText = isActive
+      ? 'background:var(--accent-s);color:var(--accent);border-color:var(--accent);font-size:11px;padding:5px 10px'
+      : 'font-size:11px;padding:5px 10px';
+  });
+}
+
+// ── Count buttons
+// document-level capture listener — يشتغل حتى لو الـ body عنده opacity:0.4
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-count]');
+  if (!btn) return;
+  const newCount = parseInt(btn.dataset.count);
+  if (isNaN(newCount)) return;
+  console.log('[AutoCut] count clicked → new:', newCount, '| old:', flowSettings.count);
+  flowSettings.count = newCount;
+  saveFlowSettings();
+}, true);
+
+get('type-image-btn').addEventListener('click',       () => { flowSettings.mediaType   = 'IMAGE';     console.log('[AutoCut] mediaType → IMAGE');      saveFlowSettings(); });
+get('type-video-btn').addEventListener('click',       () => { flowSettings.mediaType   = 'VIDEO';     console.log('[AutoCut] mediaType → VIDEO');      saveFlowSettings(); });
+get('orient-landscape-btn').addEventListener('click', () => { flowSettings.orientation = 'LANDSCAPE'; console.log('[AutoCut] orientation → LANDSCAPE'); saveFlowSettings(); });
+get('orient-portrait-btn').addEventListener('click',  () => { flowSettings.orientation = 'PORTRAIT';  console.log('[AutoCut] orientation → PORTRAIT');  saveFlowSettings(); });
+
+let _cachedModels = [];
+
+function renderModelBtns(models, currentModel) {
+  const container = get('model-btns');
+  if (!models.length) {
+    container.innerHTML = '<span style="font-size:11px;color:var(--red)">⚠️ مش لاقي موديلات — تأكد إن Flow مفتوح</span>';
+    return;
+  }
+  _cachedModels = models;
+  if (!flowSettings.model && currentModel) flowSettings.model = currentModel;
+
+  container.innerHTML = '';
+  models.forEach(model => {
+    const btn      = document.createElement('button');
+    // هنا بنقرأ flowSettings.model الحالي مش currentModel
+    const isActive = model === flowSettings.model;
+    btn.className     = 'sm-btn model-btn' + (isActive ? ' active-model' : '');
+    btn.dataset.model = model;
+    btn.textContent   = model;
+    btn.style.cssText = isActive
+      ? 'background:var(--accent-s);color:var(--accent);border-color:var(--accent);font-size:11px;padding:5px 10px'
+      : 'font-size:11px;padding:5px 10px';
+    btn.addEventListener('click', () => {
+      console.log('[AutoCut] model selected:', model);
+      flowSettings.model = model;
+      saveFlowSettings();
+    });
+    container.appendChild(btn);
+  });
+}
+
+// ── زرار تحديث ──
+get('refresh-settings-btn').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) { addLog('err', 'افتح Google Flow الأول'); return; }
+
+  console.log('[AutoCut] refresh clicked → tabId:', tab.id);
+  get('model-loading').style.display   = 'inline';
+  get('refresh-settings-btn').disabled = true;
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_FLOW_MODELS' }, response => {
+        if (chrome.runtime.lastError) {
+          console.error('[AutoCut] GET_FLOW_MODELS error:', chrome.runtime.lastError.message);
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          console.log('[AutoCut] GET_FLOW_MODELS result:', response);
+          resolve(response);
+        }
+      });
+    });
+
+    if (result?.models?.length) {
+      renderModelBtns(result.models, result.current);
+      if (result.settings) {
+        flowSettings = {
+          ...flowSettings,
+          mediaType:   result.settings.mediaType   || flowSettings.mediaType,
+          orientation: result.settings.orientation || flowSettings.orientation,
+          count:       result.settings.count       || flowSettings.count,
+          model:       result.current              || flowSettings.model,
+        };
+        saveFlowSettings();
+      }
+      addLog('ok', `✓ ${result.models.length} موديلات — الحالي: ${result.current}`);
+    } else {
+      console.warn('[AutoCut] no models found, result:', result);
+      get('model-btns').innerHTML = '<span style="font-size:11px;color:var(--red)">⚠️ مش لاقي موديلات</span>';
+      addLog('err', 'مش لاقي موديلات في Flow');
+    }
+  }  catch (e) {
+    console.error('[AutoCut] refresh error:', e.message);
+    const msg = e.message?.includes('Receiving end')
+      ? 'افتح صفحة Flow الأول ثم اضغط تحديث'
+      : 'خطأ: ' + e.message;
+    get('model-btns').innerHTML = `<span style="font-size:11px;color:var(--amber)">⚠️ ${msg}</span>`;
+    addLog('err', msg);
+  } finally {
+    get('model-loading').style.display   = 'none';
+    get('refresh-settings-btn').disabled = false;
+  }
+});
+
+// ── زرار Apply ──
+get('apply-settings-btn').addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) { addLog('err', 'افتح Google Flow الأول'); return; }
+
+  console.log('[AutoCut] apply clicked → settings:', flowSettings, '→ tabId:', tab.id);
+
+  const btn    = get('apply-settings-btn');
+  const status = get('settings-status');
+  btn.disabled    = true;
+  btn.textContent = '⏳ جاري التطبيق...';
+  status.style.display = 'block';
+  status.style.color   = 'var(--muted2)';
+  status.textContent   = '';
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tab.id, { type: 'APPLY_SETTINGS', settings: flowSettings }, response => {
+        if (chrome.runtime.lastError) {
+          console.error('[AutoCut] APPLY_SETTINGS error:', chrome.runtime.lastError.message);
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          console.log('[AutoCut] APPLY_SETTINGS result:', response);
+          resolve(response);
+        }
+      });
+    });
+
+    if (result?.ok) {
+      status.textContent = '✅ تم التطبيق بنجاح';
+      status.style.color = 'var(--green)';
+      addLog('ok', `⚙️ ${flowSettings.mediaType} | ${flowSettings.orientation} | x${flowSettings.count} | ${flowSettings.model}`);
+    } else {
+      status.textContent = '⚠️ تعذر التطبيق';
+      status.style.color = 'var(--amber)';
+      console.warn('[AutoCut] apply returned ok:false');
+      addLog('err', 'تعذر التطبيق — شوف الـ console في صفحة Flow');
+    }
+  } catch (e) {
+    console.error('[AutoCut] apply exception:', e.message);
+    status.textContent = '❌ خطأ — تأكد إن Flow مفتوح';
+    status.style.color = 'var(--red)';
+    addLog('err', 'خطأ: ' + e.message);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '✅ تطبيق على Flow';
+    setTimeout(() => { status.style.display = 'none'; }, 3000);
+  }
 });

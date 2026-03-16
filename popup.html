@@ -222,6 +222,7 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
 .confirm-btns { display: flex; gap: 8px; }
 .confirm-yes { flex: 1; background: var(--red); border: none; border-radius: var(--r); color: #fff; cursor: pointer; padding: 8px; font-weight: 700; font-size: 12px; }
 .confirm-no  { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--r); color: var(--text); cursor: pointer; padding: 8px; font-weight: 600; font-size: 12px; }
+.active-model { background: var(--accent-s) !important;color: var(--accent) !important;border-color: var(--accent) !important; }
 </style>
 </head>
 <body>
@@ -274,44 +275,137 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
     <input type="file" id="json-input" accept=".json">
   </div>
 
-  <!-- Save Settings -->
-  <div class="card">
-    <div class="card-title" style="margin-bottom:10px">💾 إعدادات الحفظ</div>
-
-    <!-- Row 1: prefix -->
-    <div class="input-group">
-      <div class="input-label">prefix اسم الملف</div>
-      <input type="text" id="save-prefix" value="scene_" placeholder="scene_">
-    </div>
-
-    <!-- Row 2: project name -->
-    <div class="input-group" style="margin-top:8px">
-      <div class="input-label">📁 اسم المشروع (فولدر داخل AutoCut)</div>
-      <input type="text" id="save-project" value="" placeholder="مثال: MyProject">
-    </div>
-
-    <!-- Path preview -->
-    <div class="path-preview" id="path-preview">
-      <span class="path-fixed">Downloads</span>
-      <span class="path-sep">/</span>
-      <span class="path-fixed">AutoCut</span>
-      <span class="path-sep">/</span>
-      <span class="path-var" id="preview-project">—</span>
-      <span class="path-sep">/</span>
-      <span class="path-file" id="preview-file">scene_001_description.png</span>
-    </div>
-
-    <!-- Auto-download toggle -->
-    <div style="margin-top:10px">
-      <div class="toggle-row">
-        <span class="toggle-label">📥 تحميل تلقائي للصور</span>
-        <label class="toggle-wrap">
-          <input type="checkbox" id="auto-download-toggle" checked="false">
+  
+  <!-- Flow Settings Card -->
+  <div class="card" id="flow-settings-card">
+    <!-- Header — قابل للضغط للـ collapse -->
+    <div class="card-header" id="flow-settings-header" style="cursor:pointer;user-select:none;margin-bottom:0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="flow-collapse-icon" style="font-size:11px;color:var(--muted2);transition:transform .2s">▼</span>
+        <div class="card-title" style="margin:0">⚙️ إعدادات Flow</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center" onclick="event.stopPropagation()">
+        <label class="toggle-wrap" title="تفعيل/تعطيل الإعدادات">
+          <input type="checkbox" id="flow-settings-toggle">
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <div style="font-size:10px;color:var(--muted2);margin-top:4px" id="auto-dl-hint">
-        مفعّل — الصور بتتحمل تلقائياً وبتتحفظ في تاب الصور
+    </div>
+
+    <!-- Collapsible body -->
+    <div id="flow-settings-collapse" style="overflow:hidden;transition:max-height .3s ease;max-height:600px">
+      <div style="padding-top:10px">
+
+        <!-- Settings body -->
+        <div id="flow-settings-body">
+          <!-- نوع الإخراج -->
+          <div class="input-group">
+            <div class="input-label">نوع الإخراج</div>
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="type-image-btn">🖼️ صورة</button>
+              <button class="btn btn-secondary" id="type-video-btn">🎬 فيديو</button>
+            </div>
+          </div>
+
+          <!-- الاتجاه -->
+          <div class="input-group" style="margin-top:8px">
+            <div class="input-label">الاتجاه</div>
+            <div class="btn-row">
+              <button class="btn btn-secondary" id="orient-landscape-btn">↔️ أفقي</button>
+              <button class="btn btn-secondary" id="orient-portrait-btn">↕️ رأسي</button>
+            </div>
+          </div>
+
+          <!-- عدد الصور -->
+          <div class="input-group" style="margin-top:8px">
+            <div class="input-label">عدد الصور لكل مشهد</div>
+            <div class="btn-row">
+              <button class="btn btn-secondary count-btn" data-count="1">x1</button>
+              <button class="btn btn-secondary count-btn" data-count="2">x2</button>
+              <button class="btn btn-secondary count-btn" data-count="3">x3</button>
+              <button class="btn btn-secondary count-btn" data-count="4">x4</button>
+            </div>
+          </div>
+
+          <!-- الموديل — زرار التحديث جنب الـ label -->
+          <div class="input-group" style="margin-top:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div class="input-label" style="margin:0">
+                الموديل
+                <span id="model-loading" style="color:var(--muted2);font-size:10px;margin-right:6px;display:none">⏳ جاري التحميل...</span>
+              </div>
+              <button class="sm-btn" id="refresh-settings-btn">🔄 تحديث</button>
+            </div>
+            <div id="model-btns" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px">
+              <span style="font-size:11px;color:var(--muted2)">اضغط "تحديث" لجلب الموديلات من Flow</span>
+            </div>
+          </div>
+
+          <!-- زرار Apply -->
+          <button class="btn btn-primary" id="apply-settings-btn" style="margin-top:12px">
+            ✅ تطبيق على Flow
+          </button>
+          <div id="settings-status" style="font-size:10px;color:var(--muted2);text-align:center;margin-top:4px;display:none"></div>
+        </div>
+
+        <!-- رسالة لما الـ toggle مقفول -->
+        <div id="flow-settings-disabled-msg" style="display:none;font-size:11px;color:var(--muted2);text-align:center;padding:8px 0">
+          ⏸ الإعدادات معطلة — Flow هيستخدم إعداداته الحالية
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+ 
+  <!-- Save Settings -->
+  <div class="card">
+    <!-- Header — قابل للضغط للـ collapse -->
+    <div class="card-header" id="save-settings-header" style="cursor:pointer;user-select:none;margin-bottom:0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="save-collapse-icon" style="font-size:11px;color:var(--muted2);transition:transform .2s">▶</span>
+        <div class="card-title" style="margin:0">💾 إعدادات الحفظ</div>
+      </div>
+    </div>
+
+    <!-- Collapsible body — مقفول بالـ default -->
+    <div id="save-settings-collapse" style="overflow:hidden;transition:max-height .3s ease;max-height:0">
+      <div style="padding-top:10px">
+
+        <div class="input-group">
+          <div class="input-label">prefix اسم الملف</div>
+          <input type="text" id="save-prefix" value="scene_" placeholder="scene_">
+        </div>
+
+        <div class="input-group" style="margin-top:8px">
+          <div class="input-label">📁 اسم المشروع (فولدر داخل AutoCut)</div>
+          <input type="text" id="save-project" value="" placeholder="مثال: MyProject">
+        </div>
+
+        <div class="path-preview" id="path-preview">
+          <span class="path-fixed">Downloads</span>
+          <span class="path-sep">/</span>
+          <span class="path-fixed">AutoCut</span>
+          <span class="path-sep">/</span>
+          <span class="path-var" id="preview-project">—</span>
+          <span class="path-sep">/</span>
+          <span class="path-file" id="preview-file">scene_001_description.png</span>
+        </div>
+
+        <!-- Auto-download toggle — default مقفول -->
+        <div style="margin-top:10px">
+          <div class="toggle-row">
+            <span class="toggle-label">📥 تحميل تلقائي للصور</span>
+            <label class="toggle-wrap">
+              <input type="checkbox" id="auto-download-toggle">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:4px" id="auto-dl-hint">
+            موقف — الصور بتتجمع في تاب الصور فقط، تحميل يدوي
+          </div>
+        </div>
+
       </div>
     </div>
   </div>

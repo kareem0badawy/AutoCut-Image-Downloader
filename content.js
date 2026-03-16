@@ -4,20 +4,24 @@ console.log("AutoCut v2.2 ready");
 // ══════════════════════════════════════════════════
 //  STATE
 // ══════════════════════════════════════════════════
-let controlMode   = null;
+let controlMode = null;
 let selectedTiles = new Set();
-let floatingBar   = null;
-let observer      = null;
+let floatingBar = null;
+let observer = null;
 
 // ══════════════════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════════════════
 function isExtensionAlive() {
-  try { return !!chrome.runtime?.id; } catch { return false; }
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
 }
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function buildFilename(prefix, num, desc) {
@@ -32,34 +36,31 @@ function buildFilename(prefix, num, desc) {
 }
 
 // ══════════════════════════════════════════════════
+//  CLICK HELPER — pointer events كاملة لـ Radix UI
+// ══════════════════════════════════════════════════
+function clickElement(el) {
+  el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }));
+  el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  el.dispatchEvent(new PointerEvent("pointerup",  { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 0 }));
+  el.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true }));
+  el.dispatchEvent(new MouseEvent("click",    { bubbles: true }));
+}
+
+// ══════════════════════════════════════════════════
 //  TILE RESOLUTION
-//
-//  Flow DOM wraps every image in two nested elements
-//  that share the same data-tile-id:
-//
-//    outer [data-tile-id="fe_id_abc"]   ← no img directly
-//      └── inner [data-tile-id="fe_id_abc"]  ← has <img>
-//
-//  Strategy: the real (inner) tile is the one that:
-//    1. Contains img[alt="صورة تم إنشاؤها"]
-//    2. Has NO descendant [data-tile-id]
-//
-//  This is DOM-structure-agnostic — works regardless
-//  of how many wrapper divs sit between outer & inner.
 // ══════════════════════════════════════════════════
 function getImageTile(el) {
-  // Given any element with data-tile-id, walk DOWN to find
-  // the innermost tile that directly owns the image.
   const nested = el.querySelector("[data-tile-id]");
-  if (nested) return getImageTile(nested);   // recurse into deeper tile
+  if (nested) return getImageTile(nested);
   return el.querySelector('img[alt="صورة تم إنشاؤها"]') ? el : null;
 }
 
-// Returns a stable, ordered, deduplicated list of real image tiles.
 function getInnerTiles() {
-  const seen   = new Set();
+  const seen = new Set();
   const result = [];
-  const scope  = document.querySelector('[data-testid="virtuoso-item-list"]') || document.body;
+  const scope =
+    document.querySelector('[data-testid="virtuoso-item-list"]') ||
+    document.body;
 
   for (const el of scope.querySelectorAll("[data-tile-id]")) {
     const inner = getImageTile(el);
@@ -72,9 +73,10 @@ function getInnerTiles() {
   return result;
 }
 
-// Safe lookup by ID — always resolves to the inner tile.
 function getTileById(tileId) {
-  const all = document.querySelectorAll(`[data-tile-id="${CSS.escape(tileId)}"]`);
+  const all = document.querySelectorAll(
+    `[data-tile-id="${CSS.escape(tileId)}"]`,
+  );
   for (const el of all) {
     const inner = getImageTile(el);
     if (inner) return inner;
@@ -83,12 +85,201 @@ function getTileById(tileId) {
 }
 
 // ══════════════════════════════════════════════════
+//  FLOW SETTINGS — FIND MAIN BTN
+// ══════════════════════════════════════════════════
+function findMainSettingsBtn() {
+  const allBtns = Array.from(document.querySelectorAll('button[aria-haspopup="menu"]'));
+  console.log('[AutoCut] findMainSettingsBtn → total candidates:', allBtns.length);
+
+  const result = allBtns.find(btn => {
+    const inMenu     = !!btn.closest('[role="menu"]');
+    const inDropdown = !!btn.closest('.DropdownMenuContent');
+    const arrowText  = btn.querySelector('i.google-symbols')?.textContent.trim();
+    const txt        = btn.textContent.trim();
+    console.log('[AutoCut]   btn:', txt.slice(0, 40),
+      '| inMenu:', inMenu, '| inDropdown:', inDropdown,
+      '| arrowText:', arrowText);
+
+    if (inMenu || inDropdown) return false;
+
+    // الزرار الصح: icon بتاعه crop_16_9 أو crop_9_16
+    const validIcons = ['crop_16_9', 'crop_9_16', 'arrow_drop_down'];
+    return validIcons.includes(arrowText);
+  });
+
+  console.log('[AutoCut] findMainSettingsBtn → found:',
+    result ? result.textContent.trim().slice(0, 40) : 'NULL');
+  return result;
+}
+
+// ══════════════════════════════════════════════════
+//  FLOW SETTINGS — GET MODELS
+// ══════════════════════════════════════════════════
+async function openMainDropdownAndGetModels() {
+  const mainBtn = findMainSettingsBtn();
+  if (!mainBtn) return { models: [], current: '', settings: null };
+
+  clickElement(mainBtn);
+  await sleep(500);
+
+  const dropdown = document.querySelector('.DropdownMenuContent');
+  if (!dropdown) return { models: [], current: '', settings: null };
+
+  // اقرأ الـ tabs الحالية
+  const settings = { mediaType: 'IMAGE', orientation: 'LANDSCAPE', count: 1 };
+  dropdown.querySelectorAll('[role="tab"]').forEach(tab => {
+    if (tab.getAttribute('aria-selected') !== 'true') return;
+    const icon = tab.querySelector('i')?.textContent.trim();
+    const txt  = tab.textContent.trim();
+    if (icon === 'image')     settings.mediaType   = 'IMAGE';
+    if (icon === 'videocam')  settings.mediaType   = 'VIDEO';
+    if (icon === 'crop_16_9') settings.orientation = 'LANDSCAPE';
+    if (icon === 'crop_9_16') settings.orientation = 'PORTRAIT';
+    if (/^x(\d)$/.test(txt))  settings.count       = parseInt(txt[1]);
+  });
+
+  // الموديل الحالي
+  const modelTrigger = dropdown.querySelector('button[aria-haspopup="menu"][data-state="closed"]');
+  const currentModel = modelTrigger
+    ? modelTrigger.textContent.replace(/arrow_drop_down/g, '').trim()
+    : '';
+
+  // افتح dropdown الموديلات
+  let models = [];
+  if (modelTrigger) {
+    clickElement(modelTrigger);
+    await sleep(500);
+
+    document.querySelectorAll('.sc-a0dcecfb-8').forEach(el => {
+      const name = el.textContent.trim();
+      if (name && !models.includes(name)) models.push(name);
+    });
+    console.log('[AutoCut] models found:', models);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await sleep(300);
+  }
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await sleep(300);
+
+  return { models, current: currentModel, settings };
+}
+
+// ══════════════════════════════════════════════════
+//  FLOW SETTINGS — APPLY
+// ══════════════════════════════════════════════════
+async function applyFlowSettings(s) {
+  console.log('[AutoCut] applyFlowSettings called with:', s);
+
+  const mainBtn = findMainSettingsBtn();
+  if (!mainBtn) { console.error('[AutoCut] mainBtn not found — aborting'); return false; }
+
+  clickElement(mainBtn);
+  console.log('[AutoCut] mainBtn clicked, waiting for dropdown...');
+  await sleep(500);
+
+  const dropdown = document.querySelector('.DropdownMenuContent');
+  if (!dropdown) { console.error('[AutoCut] .DropdownMenuContent not found after click'); return false; }
+  console.log('[AutoCut] dropdown found ✓');
+
+  // ── نوع الميديا ──
+  if (s.mediaType) {
+    const iconName = s.mediaType === 'IMAGE' ? 'image' : 'videocam';
+    const tab = Array.from(dropdown.querySelectorAll('[role="tab"]'))
+      .find(t => t.querySelector('i')?.textContent.trim() === iconName);
+    console.log('[AutoCut] mediaType tab found:', !!tab, '| active:', tab?.getAttribute('aria-selected'));
+    if (tab && tab.getAttribute('aria-selected') !== 'true') {
+      clickElement(tab); await sleep(300);
+    }
+  }
+
+  // ── الاتجاه ──
+  if (s.orientation) {
+    const iconName = s.orientation === 'LANDSCAPE' ? 'crop_16_9' : 'crop_9_16';
+    const tab = Array.from(dropdown.querySelectorAll('[role="tab"]'))
+      .find(t => t.querySelector('i')?.textContent.trim() === iconName);
+    console.log('[AutoCut] orientation tab found:', !!tab, '| active:', tab?.getAttribute('aria-selected'));
+    if (tab && tab.getAttribute('aria-selected') !== 'true') {
+      clickElement(tab); await sleep(300);
+    }
+  }
+
+  // ── العدد ──
+  if (s.count) {
+    const allTabs = Array.from(dropdown.querySelectorAll('[role="tab"]'));
+    const tab = allTabs.find(t => t.textContent.trim() === `x${s.count}`);
+    console.log('[AutoCut] count tab "x' + s.count + '" found:', !!tab,
+      '| all:', allTabs.filter(t => /^x\d$/.test(t.textContent.trim())).map(t => t.textContent.trim()));
+    if (tab && tab.getAttribute('aria-selected') !== 'true') {
+      clickElement(tab); await sleep(300);
+    }
+  }
+
+  // ── الموديل ──
+  if (s.model) {
+    const modelTrigger = dropdown.querySelector('button[aria-haspopup="menu"][data-state="closed"]');
+    console.log('[AutoCut] modelTrigger found:', !!modelTrigger);
+    if (modelTrigger) {
+      clickElement(modelTrigger);
+      await sleep(500);
+
+      const modelEls = document.querySelectorAll('.sc-a0dcecfb-8');
+      console.log('[AutoCut] models:', Array.from(modelEls).map(e => e.textContent.trim()));
+
+      let found = false;
+      for (const el of modelEls) {
+        if (el.textContent.trim() === s.model) {
+          const menuItem = el.closest('[role="menuitem"]');
+          console.log('[AutoCut] target model found, menuItem:', !!menuItem);
+          if (menuItem) { clickElement(menuItem); found = true; await sleep(200); break; }
+        }
+      }
+      if (!found) {
+        console.warn('[AutoCut] model not found in list, pressing Escape');
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await sleep(200);
+      }
+    }
+  }
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await sleep(300);
+  console.log('[AutoCut] applyFlowSettings done ✓');
+  return true;
+}
+
+// ══════════════════════════════════════════════════
 //  MESSAGE LISTENER
 // ══════════════════════════════════════════════════
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!isExtensionAlive()) return;
-  if (msg.type === "CAPTURE_IMAGES")  { sendResponse({ images: captureImagesFromDOM() }); }
-  if (msg.type === "INJECT_CONTROL")  { injectFloatingBar(); sendResponse({ ok: true }); }
+
+  if (msg.type === "CAPTURE_IMAGES") {
+    sendResponse({ images: captureImagesFromDOM() });
+    return true;
+  }
+
+  if (msg.type === "INJECT_CONTROL") {
+    injectFloatingBar();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "GET_FLOW_MODELS") {
+    openMainDropdownAndGetModels()
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse({ models: [], current: "", settings: null }));
+    return true;
+  }
+
+  if (msg.type === "APPLY_SETTINGS") {
+    applyFlowSettings(msg.settings)
+      .then((ok) => sendResponse({ ok }))
+      .catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
   return true;
 });
 
@@ -99,7 +290,7 @@ function injectFloatingBar() {
   if (floatingBar) return;
 
   const style = document.createElement("style");
-  style.id    = "autocut-style";
+  style.id = "autocut-style";
   style.textContent = `
     #autocut-bar {
       position: fixed; bottom: 24px; right: 24px; z-index: 999999;
@@ -181,10 +372,10 @@ function injectFloatingBar() {
   `;
   document.body.appendChild(floatingBar);
 
-  document.getElementById("ac-dl-btn").addEventListener("click",    () => toggleMode("download"));
-  document.getElementById("ac-del-btn").addEventListener("click",   () => toggleMode("delete"));
+  document.getElementById("ac-dl-btn").addEventListener("click", () => toggleMode("download"));
+  document.getElementById("ac-del-btn").addEventListener("click", () => toggleMode("delete"));
   document.getElementById("ac-cancel-btn").addEventListener("click", cancelSelection);
-  document.getElementById("ac-exec-btn").addEventListener("click",   executeAction);
+  document.getElementById("ac-exec-btn").addEventListener("click", executeAction);
 
   startObserver();
 }
@@ -198,8 +389,10 @@ function toggleMode(mode) {
   controlMode = mode;
   selectedTiles.clear();
 
-  document.getElementById("ac-dl-btn").className  = "ac-mode-btn" + (mode === "download" ? " active-dl" : "");
-  document.getElementById("ac-del-btn").className = "ac-mode-btn" + (mode === "delete"   ? " active-del" : "");
+  document.getElementById("ac-dl-btn").className =
+    "ac-mode-btn" + (mode === "download" ? " active-dl" : "");
+  document.getElementById("ac-del-btn").className =
+    "ac-mode-btn" + (mode === "delete" ? " active-del" : "");
 
   const selAllBtn = document.getElementById("ac-selall-btn");
   selAllBtn.style.display = "inline-block";
@@ -220,7 +413,7 @@ function attachTileListeners() {
   getInnerTiles().forEach((tile, index) => {
     if (tile.dataset.acListened === "1") return;
     tile.dataset.acListened = "1";
-    tile.dataset.acIndex    = String(index);   // 0-based DOM index
+    tile.dataset.acIndex = String(index);
 
     if (!tile.querySelector(".ac-check")) {
       const check = document.createElement("div");
@@ -273,20 +466,16 @@ async function executeAction() {
   if (!selectedTiles.size || !controlMode) return;
   if (!isExtensionAlive()) { showContextInvalidatedWarning(); return; }
 
-  // Load everything from storage in one call
-  const storage = await new Promise(resolve =>
-    chrome.storage.local.get(["capturedImages", "scenes", "prefix"], resolve)
+  const storage = await new Promise((resolve) =>
+    chrome.storage.local.get(["capturedImages", "scenes", "prefix"], resolve),
   ).catch(() => ({}));
 
   const capturedImages = storage.capturedImages || [];
   const allScenes      = storage.scenes         || [];
   const prefix         = storage.prefix         || "scene_";
-
-  // Get ordered inner tiles snapshot for index mapping
-  const orderedTiles = getInnerTiles();
-
-  const selectedData = [];
-  const seen         = new Set();
+  const orderedTiles   = getInnerTiles();
+  const selectedData   = [];
+  const seen           = new Set();
 
   for (const tileId of selectedTiles) {
     if (seen.has(tileId)) continue;
@@ -300,9 +489,7 @@ async function executeAction() {
 
     const rawSrc = img.getAttribute("src") || img.src;
     const url    = rawSrc.startsWith("http") ? rawSrc : `${location.origin}${rawSrc}`;
-
-    // ── Priority 1: exact URL match in capturedImages (from a Queue run) ──
-    const captured = capturedImages.find(c => c.url === url);
+    const captured = capturedImages.find((c) => c.url === url);
 
     let sceneNumber, sceneDesc, filename;
 
@@ -311,11 +498,9 @@ async function executeAction() {
       sceneDesc   = captured.scene_description;
       filename    = captured.filename;
     } else {
-      // ── Priority 2: DOM position → allScenes index ──
-      const domIndex   = orderedTiles.indexOf(tile);  // reliable because orderedTiles = getInnerTiles()
+      const domIndex   = orderedTiles.indexOf(tile);
       const sceneIndex = domIndex >= 0 ? domIndex : 0;
-      const scene      = allScenes[sceneIndex];       // undefined if no JSON uploaded yet
-
+      const scene      = allScenes[sceneIndex];
       sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
       sceneDesc   = scene ? scene.scene_description : "";
       filename    = buildFilename(prefix, sceneNumber, sceneDesc);
@@ -329,9 +514,12 @@ async function executeAction() {
   if (controlMode === "download") {
     try {
       chrome.runtime.sendMessage({ type: "EXECUTE_SELECTION", action: "download", images: selectedData });
-    } catch { showContextInvalidatedWarning(); return; }
+    } catch {
+      showContextInvalidatedWarning();
+      return;
+    }
   } else {
-    await deleteSelectedTiles(selectedData.map(d => d.id));
+    await deleteSelectedTiles(selectedData.map((d) => d.id));
   }
 
   cancelSelection();
@@ -343,12 +531,12 @@ async function executeAction() {
 function cancelSelection() {
   controlMode = null;
   selectedTiles.clear();
-  document.querySelectorAll("[data-tile-id]").forEach(t => t.classList.remove("ac-sel-dl", "ac-sel-del"));
+  document.querySelectorAll("[data-tile-id]").forEach((t) => t.classList.remove("ac-sel-dl", "ac-sel-del"));
   const dlBtn     = document.getElementById("ac-dl-btn");
   const delBtn    = document.getElementById("ac-del-btn");
   const selAllBtn = document.getElementById("ac-selall-btn");
-  if (dlBtn)     dlBtn.className    = "ac-mode-btn";
-  if (delBtn)    delBtn.className   = "ac-mode-btn";
+  if (dlBtn)     dlBtn.className         = "ac-mode-btn";
+  if (delBtn)    delBtn.className        = "ac-mode-btn";
   if (selAllBtn) selAllBtn.style.display = "none";
   updateActionBar();
 }
@@ -402,21 +590,13 @@ async function deleteSingleTile(tile) {
     const moreBtn = tile.querySelector('button[aria-haspopup="menu"]');
     if (!moreBtn) { console.warn("AutoCut: مش لاقي زرار الـ 3 نقط"); return false; }
 
-    moreBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 1 }));
-    moreBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    moreBtn.dispatchEvent(new PointerEvent("pointerup",  { bubbles: true, cancelable: true, pointerId: 1, isPrimary: true, button: 0, buttons: 0 }));
-    moreBtn.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true }));
-    moreBtn.dispatchEvent(new MouseEvent("click",    { bubbles: true }));
+    clickElement(moreBtn);
     await sleep(400);
 
     const deleteBtn = findDeleteBtn();
     if (!deleteBtn) { console.warn("AutoCut: مش لاقي زرار الحذف"); return false; }
 
-    deleteBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    deleteBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    deleteBtn.dispatchEvent(new PointerEvent("pointerup",  { bubbles: true }));
-    deleteBtn.dispatchEvent(new MouseEvent("mouseup",  { bubbles: true }));
-    deleteBtn.dispatchEvent(new MouseEvent("click",    { bubbles: true }));
+    clickElement(deleteBtn);
     await sleep(250);
     return true;
   } catch (e) {
@@ -430,7 +610,8 @@ function findDeleteBtn() {
   if (!menu) return null;
   for (const item of menu.querySelectorAll('[role="menuitem"]')) {
     const icon = item.querySelector("i");
-    if (icon && icon.textContent.trim() === "delete" && item.textContent.includes("حذف")) return item;
+    if (icon && icon.textContent.trim() === "delete" && item.textContent.includes("حذف"))
+      return item;
   }
   return null;
 }
@@ -461,7 +642,8 @@ function hideDeleteProgress() {
 //  MUTATION OBSERVER
 // ══════════════════════════════════════════════════
 function startObserver() {
-  const target = document.querySelector('[data-testid="virtuoso-item-list"]') || document.body;
+  const target =
+    document.querySelector('[data-testid="virtuoso-item-list"]') || document.body;
   observer = new MutationObserver(() => { if (controlMode) attachTileListeners(); });
   observer.observe(target, { childList: true, subtree: true });
 }
