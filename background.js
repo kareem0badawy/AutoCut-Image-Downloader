@@ -1,18 +1,14 @@
 ﻿// ═══════════════════════════════════════════════════
-//  AutoCut v2.1 — background.js
+//  AutoCut v2.1 — background.js (fixed v2)
 // ═══════════════════════════════════════════════════
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [10000, 30000, 60000];
 
-// ── Keep-Alive ─────────────────────────────────────
 let keepAliveInterval = null;
 function startKeepAlive() {
   if (keepAliveInterval) return;
-  keepAliveInterval = setInterval(
-    () => chrome.runtime.getPlatformInfo(() => {}),
-    20000,
-  );
+  keepAliveInterval = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
 }
 function stopKeepAlive() {
   if (keepAliveInterval) {
@@ -21,72 +17,59 @@ function stopKeepAlive() {
   }
 }
 
-// ── Message Listener ───────────────────────────────
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // ✅ MANUAL_DOWNLOAD مرة واحدة بس — بتستخدم doDownload المتكاملة
   if (msg.type === "MANUAL_DOWNLOAD") {
     doDownload(msg.url, msg.filename, msg.folder)
       .then(() => sendResponse({ ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true; // keep channel open for async
+    return true;
   }
 
   if (msg.type === "EXECUTE_SELECTION") {
     if (msg.action === "download") {
-      // ✅ بنجيب الـ folder مرة واحدة قبل الـ loop
-      chrome.storage.local.get(["saveProject", "prefix"], async (r) => {
+      chrome.storage.local.get(["saveProject", "prefix", "scenes"], async (r) => {
         const project = r.saveProject || "";
         const prefix = r.prefix || "scene_";
         const folder = project ? `AutoCut/${project}` : "AutoCut";
+        const allScenes = r.scenes || [];
 
-        // ✅ deduplication بالـ URL قبل ما نبدأ نحمّل
         const seen = new Set();
-        const uniqueImages = msg.images.filter((img) => {
-          // استخرج الـ base URL بدون الـ query params (GoogleAccessId etc.)
-          const baseUrl = img.url.split("?")[0];
-          if (seen.has(baseUrl)) return false;
-          seen.add(baseUrl);
-          return true;
-        });
+        for (const img of (msg.images || [])) {
+          if (seen.has(img.id)) continue;
+          seen.add(img.id);
 
-        for (const img of uniqueImages) {
-          const num = String(img.scene_number || 1).padStart(3, "0");
-          const desc = (img.scene_description || "")
-            .replace(/,/g, " ")
-            .replace(/[<>:"/\\|?*]/g, "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 80);
-          const filename = desc
-            ? `${prefix}${num}_${desc}.png`
-            : `${prefix}${num}.png`;
+          let filename;
+          if (img.filename) {
+            filename = img.filename;
+          } else {
+            let targetScene = allScenes.find((s) => s.scene_number === img.scene_number);
+            if (!targetScene && img.scene_description) {
+              targetScene = allScenes.find((s) =>
+                (s.scene_description || "").toLowerCase().includes(
+                  img.scene_description.toLowerCase().slice(0, 20),
+                ),
+              );
+            }
+            const finalScene = targetScene || {
+              scene_number: img.scene_number || 1,
+              scene_description: img.scene_description || "",
+            };
+            const num = String(finalScene.scene_number).padStart(3, "0");
+            const desc = (finalScene.scene_description || "")
+              .replace(/,/g, " ")
+              .replace(/[<>:"/\\|?*]/g, "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 80);
+            filename = desc ? `${prefix}${num}_${desc}.png` : `${prefix}${num}.png`;
+          }
 
           await doDownload(img.url, filename, folder);
         }
+        sendResponse({ ok: true });
       });
-    } else if (msg.action === "delete") {
-      // ✅ المطابقة بالـ tileId في الـ capturedImages
-      // لأن capturedImages.id = Date.now() والـ tileId مختلف
-      // فبنستخدم base URL للمطابقة
-      const baseUrlsToDelete = new Set(
-        (msg.urls || []).map((u) => u.split("?")[0]),
-      );
-
-      chrome.storage.local.get(["capturedImages"], (r) => {
-        const remaining = (r.capturedImages || []).filter((img) => {
-          const base = (img.url || "").split("?")[0];
-          return !baseUrlsToDelete.has(base);
-        });
-        chrome.storage.local.set({ capturedImages: remaining }, () => {
-          chrome.runtime
-            .sendMessage({ type: "IMAGE_CAPTURED", capturedImages: remaining })
-            .catch(() => {});
-        });
-      });
+      return true;
     }
-
-    sendResponse({ ok: true });
-    return true;
   }
 
   if (msg.type === "START_QUEUE") {
@@ -104,19 +87,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+
+  return false;
 });
 
-// ── Main Queue Runner ──────────────────────────────
 async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
   startKeepAlive();
   const sessionStart = Date.now();
   const timings = [];
   const savePath = (folder || "AutoCut").replace(/[<>:"|?*]/g, "").trim();
 
-  let startFrom = retryFailedOnly ? 0 : (await getStorage("doneCount")) || 0;
-  const scenesToRun = retryFailedOnly
-    ? scenes.filter((s) => s._failed)
-    : scenes;
+  const startFrom = retryFailedOnly ? 0 : (await getStorage("doneCount")) || 0;
+  const scenesToRun = retryFailedOnly ? scenes.filter((s) => s._failed) : scenes;
 
   await setStorage({
     isRunning: true,
@@ -153,21 +135,11 @@ async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if (attempt > 0) {
         const delay = RETRY_DELAYS[attempt - 1];
-        sendLog(
-          "info",
-          `↻ Retry ${attempt}/${MAX_RETRIES - 1} — waiting ${delay / 1000}s...`,
-        );
+        sendLog("info", `↻ Retry ${attempt}/${MAX_RETRIES - 1} — waiting ${delay / 1000}s...`);
         await sleep(delay);
       }
       const t0 = Date.now();
-      ok = await processScene(
-        scene,
-        fname,
-        tabId,
-        avgTimeout,
-        savePath,
-        shouldDownload,
-      );
+      ok = await processScene(scene, fname, tabId, avgTimeout, savePath, shouldDownload);
       if (ok) {
         timings.push(Date.now() - t0);
         if (timings.length > 20) timings.shift();
@@ -193,18 +165,14 @@ async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
     }
 
     const allScenes = (await getStorage("scenes")) || scenes;
-    const idx = allScenes.findIndex(
-      (s) => s.scene_number === scene.scene_number,
-    );
+    const idx = allScenes.findIndex((s) => s.scene_number === scene.scene_number);
     if (idx !== -1) {
       allScenes[idx] = scene;
       await setStorage({ scenes: allScenes });
     }
 
     sendStats(done, fail);
-    await setStorage({
-      lastProgress: { i, total: scenesToRun.length, scene, done, fail },
-    });
+    await setStorage({ lastProgress: { i, total: scenesToRun.length, scene, done, fail } });
     await sleep(2000);
   }
 
@@ -222,15 +190,12 @@ async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
   });
 
   sendLog("ok", `🎉 All done! ${finalDone} ✓  ${finalFail} ✗  (${duration}s)`);
-  chrome.runtime
-    .sendMessage({ type: "DONE", done: finalDone, fail: finalFail })
-    .catch(() => {});
+  chrome.runtime.sendMessage({ type: "DONE", done: finalDone, fail: finalFail }).catch(() => {});
 
   stopKeepAlive();
   await setStorage({ isRunning: false });
 }
 
-// ── Build Filename ─────────────────────────────────
 function buildFilename(prefix, scene) {
   const num = String(scene.scene_number).padStart(3, "0");
   const desc = (scene.scene_description || "")
@@ -239,123 +204,79 @@ function buildFilename(prefix, scene) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
-  // ✅ لو desc فاضي — مفيش _ زيادة
   return desc ? `${prefix}${num}_${desc}.png` : `${prefix}${num}.png`;
 }
 
-// ── Download Helper ────────────────────────────────
 function doDownload(url, filename, folder) {
-  // ✅ حوّل الـ relative URL لـ absolute
-  const fullUrl = url.startsWith("http")
-    ? url
-    : `https://labs.google.com${url}`;
+  const fullUrl = url.startsWith("http") ? url : `https://labs.google.com${url}`;
   const savePath = (folder || "AutoCut").replace(/[<>:"|?*]/g, "").trim();
   const safeFile = (filename || "image.png").replace(/[\\/:*?"<>|]/g, "_");
 
   return new Promise((res, rej) => {
-    chrome.downloads.download(
-      { url: fullUrl, filename: `${savePath}/${safeFile}`, saveAs: false },
-      (id) => {
-        if (chrome.runtime.lastError)
-          rej(new Error(chrome.runtime.lastError.message));
-        else res(id);
-      },
-    );
+    chrome.downloads.download({ url: fullUrl, filename: `${savePath}/${safeFile}`, saveAs: false }, (id) => {
+      if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
+      else res(id);
+    });
   });
 }
 
-// ── Process Single Scene ───────────────────────────
-async function processScene(
-  scene,
-  fname,
-  tabId,
-  timeout = 90000,
-  savePath = "AutoCut",
-  shouldDownload = true,
-) {
+async function processScene(scene, fname, tabId, timeout = 90000, savePath = "AutoCut", shouldDownload = true) {
   let debuggerAttached = false;
   const debuggee = { tabId };
 
   const dbg = {
-    attach: () =>
-      new Promise((res, rej) => {
-        chrome.debugger.attach(debuggee, "1.3", () => {
-          if (chrome.runtime.lastError)
-            rej(new Error(chrome.runtime.lastError.message));
-          else res();
-        });
-      }),
-    detach: () =>
-      new Promise((res) => chrome.debugger.detach(debuggee, () => res())),
-    send: (method, params = {}) =>
-      new Promise((res, rej) => {
-        chrome.debugger.sendCommand(debuggee, method, params, (result) => {
-          if (chrome.runtime.lastError)
-            rej(new Error(chrome.runtime.lastError.message));
-          else res(result);
-        });
-      }),
+    attach: () => new Promise((res, rej) => {
+      chrome.debugger.attach(debuggee, "1.3", () => {
+        if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
+        else res();
+      });
+    }),
+    detach: () => new Promise((res) => chrome.debugger.detach(debuggee, () => res())),
+    send: (method, params = {}) => new Promise((res, rej) => {
+      chrome.debugger.sendCommand(debuggee, method, params, (result) => {
+        if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
+        else res(result);
+      });
+    }),
   };
 
   try {
-    // 1. Focus editor
-    const prepared = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const box = document.querySelector(
-          '[data-slate-editor="true"][contenteditable="true"]',
-        );
-        if (!box) return false;
-        box.click();
-        box.focus();
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(box);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        return true;
-      },
-    });
-    if (!prepared?.[0]?.result) {
+    const info = await getPromptEditorInfo(tabId);
+    if (!info) {
       sendLog("err", "Editor not found");
       return false;
     }
-    await sleep(200);
 
-    // 2. CDP insertText
     await dbg.attach();
     debuggerAttached = true;
-    await dbg.send("Input.insertText", { text: scene.main_prompt });
-    await sleep(400);
 
-    // 3. Verify
-    const verified = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => {
-        const box = document.querySelector(
-          '[data-slate-editor="true"][contenteditable="true"]',
-        );
-        return box
-          ? (box.innerText || box.textContent || "").trim().length > 0
-          : false;
-      },
-    });
-    if (!verified?.[0]?.result) {
+    await focusPromptEditorViaCDP(dbg, info);
+    await sleep(120);
+    await replaceEditorTextViaCDP(dbg, scene.main_prompt || "");
+    await sleep(250);
+
+    let verified = await isPromptEditorFilled(tabId, scene.main_prompt || "");
+    if (!verified) {
+      await focusPromptEditorViaCDP(dbg, info);
+      await sleep(120);
+      await replaceEditorTextViaCDP(dbg, scene.main_prompt || "");
+      await sleep(300);
+      verified = await isPromptEditorFilled(tabId, scene.main_prompt || "");
+    }
+
+    if (!verified) {
       sendLog("err", "Inject failed");
       return false;
     }
     sendLog("ok", "Prompt injected");
 
-    // 4. Click send
     const clicked = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        const btn = Array.from(document.querySelectorAll("button")).find(
-          (b) => {
-            const i = b.querySelector("i");
-            return i && i.textContent.trim() === "arrow_forward" && !b.disabled;
-          },
-        );
+        const btn = Array.from(document.querySelectorAll("button")).find((b) => {
+          const i = b.querySelector("i");
+          return i && i.textContent.trim() === "arrow_forward" && !b.disabled;
+        });
         if (btn) {
           btn.click();
           return true;
@@ -368,11 +289,7 @@ async function processScene(
       return false;
     }
 
-    // 5. Poll for image
-    sendLog(
-      "info",
-      `Waiting for image (timeout: ${Math.round(timeout / 1000)}s)...`,
-    );
+    sendLog("info", `Waiting for image (timeout: ${Math.round(timeout / 1000)}s)...`);
     const imgUrl = await pollForImage(tabId, timeout);
     if (!imgUrl) {
       sendLog("err", `Image not found after ${Math.round(timeout / 1000)}s`);
@@ -380,7 +297,6 @@ async function processScene(
     }
     sendLog("ok", "Image found");
 
-    // 6. Save to capturedImages
     const capturedImages = (await getStorage("capturedImages")) || [];
     capturedImages.push({
       id: Date.now(),
@@ -392,11 +308,8 @@ async function processScene(
       timestamp: new Date().toISOString(),
     });
     await setStorage({ capturedImages });
-    chrome.runtime
-      .sendMessage({ type: "IMAGE_CAPTURED", capturedImages })
-      .catch(() => {});
+    chrome.runtime.sendMessage({ type: "IMAGE_CAPTURED", capturedImages }).catch(() => {});
 
-    // 7. Auto-download
     if (shouldDownload) {
       await doDownload(imgUrl, fname, savePath);
       sendLog("ok", `Saved: ${savePath}/${fname}`);
@@ -412,18 +325,137 @@ async function processScene(
 
     return true;
   } catch (e) {
-    sendLog("err", e.message?.slice(0, 100) || "Unknown error");
+    sendLog("err", e.message?.slice(0, 150) || "Unknown error");
     return false;
   } finally {
     if (debuggerAttached) {
-      try {
-        await dbg.detach();
-      } catch (_) {}
+      try { await dbg.detach(); } catch (_) {}
     }
   }
 }
 
-// ── Poll for new image ─────────────────────────────
+async function getPromptEditorInfo(tabId) {
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const editor = document.querySelector('[data-slate-editor="true"][contenteditable="true"]');
+      if (!editor) return null;
+      const rect = editor.getBoundingClientRect();
+      return {
+        x: Math.round(rect.left + Math.min(rect.width / 2, 40)),
+        y: Math.round(rect.top + Math.min(rect.height / 2, 20)),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    },
+  });
+  return res?.[0]?.result || null;
+}
+
+async function focusPromptEditorViaCDP(dbg, info) {
+  await dbg.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: info.x,
+    y: info.y,
+    button: "none",
+    buttons: 0,
+  });
+  await dbg.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: info.x,
+    y: info.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await dbg.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: info.x,
+    y: info.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
+}
+
+async function dispatchCtrlA(dbg) {
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    windowsVirtualKeyCode: 17,
+    nativeVirtualKeyCode: 17,
+    code: "ControlLeft",
+    key: "Control",
+    modifiers: 2,
+  });
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    code: "KeyA",
+    key: "a",
+    text: "a",
+    unmodifiedText: "a",
+    modifiers: 2,
+  });
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    windowsVirtualKeyCode: 65,
+    nativeVirtualKeyCode: 65,
+    code: "KeyA",
+    key: "a",
+    modifiers: 2,
+  });
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    windowsVirtualKeyCode: 17,
+    nativeVirtualKeyCode: 17,
+    code: "ControlLeft",
+    key: "Control",
+    modifiers: 0,
+  });
+}
+
+async function dispatchBackspace(dbg) {
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "rawKeyDown",
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8,
+    code: "Backspace",
+    key: "Backspace",
+  });
+  await dbg.send("Input.dispatchKeyEvent", {
+    type: "keyUp",
+    windowsVirtualKeyCode: 8,
+    nativeVirtualKeyCode: 8,
+    code: "Backspace",
+    key: "Backspace",
+  });
+}
+
+async function replaceEditorTextViaCDP(dbg, text) {
+  await dispatchCtrlA(dbg);
+  await sleep(60);
+  await dispatchBackspace(dbg);
+  await sleep(60);
+  await dbg.send("Input.insertText", { text });
+}
+
+async function isPromptEditorFilled(tabId, expectedText = "") {
+  const res = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (expected) => {
+      const editor = document.querySelector('[data-slate-editor="true"][contenteditable="true"]');
+      if (!editor) return false;
+      const text = (editor.innerText || editor.textContent || "").trim();
+      if (!text) return false;
+      if (!expected) return true;
+      return text === expected.trim();
+    },
+    args: [expectedText],
+  });
+  return !!res?.[0]?.result;
+}
+
 async function pollForImage(tabId, timeout = 90000) {
   const selector = 'img[src*="media.getMediaUrlRedirect"]';
   const beforeRes = await chrome.scripting.executeScript({
@@ -452,46 +484,31 @@ async function pollForImage(tabId, timeout = 90000) {
   return null;
 }
 
-// ── Session History ────────────────────────────────
 async function saveSessionHistory(total, done, fail, duration) {
   const history = (await getStorage("sessionHistory")) || [];
-  history.unshift({
-    date: new Date().toISOString(),
-    total,
-    done,
-    fail,
-    duration,
-  });
+  history.unshift({ date: new Date().toISOString(), total, done, fail, duration });
   if (history.length > 20) history.splice(20);
   await setStorage({ sessionHistory: history });
   chrome.runtime.sendMessage({ type: "HISTORY_UPDATE" }).catch(() => {});
 }
 
-// ── Smart Timeout ──────────────────────────────────
 function calcSmartTimeout(timings) {
   if (!timings.length) return 90000;
   const avg = timings.reduce((a, b) => a + b, 0) / timings.length;
   return Math.max(45000, Math.min(120000, avg * 1.5));
 }
 
-// ── Helpers ────────────────────────────────────────
 function sendLog(type, msg) {
-  chrome.runtime
-    .sendMessage({ type: "LOG", logType: type, msg })
-    .catch(() => {});
+  chrome.runtime.sendMessage({ type: "LOG", logType: type, msg }).catch(() => {});
 }
 function sendProgress(i, total, scene) {
-  chrome.runtime
-    .sendMessage({ type: "PROGRESS", i, total, scene })
-    .catch(() => {});
+  chrome.runtime.sendMessage({ type: "PROGRESS", i, total, scene }).catch(() => {});
 }
 function sendStats(done, fail) {
   chrome.runtime.sendMessage({ type: "STATS", done, fail }).catch(() => {});
 }
 function getStorage(key) {
-  return new Promise((res) =>
-    chrome.storage.local.get([key], (r) => res(r[key])),
-  );
+  return new Promise((res) => chrome.storage.local.get([key], (r) => res(r[key])));
 }
 function setStorage(obj) {
   return new Promise((res) => chrome.storage.local.set(obj, res));
