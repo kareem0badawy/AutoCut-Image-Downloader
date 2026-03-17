@@ -27,6 +27,7 @@ function stopKeepAlive() {
 //  MESSAGE ROUTER
 // ══════════════════════════════════════════════════
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    console.log('[AutoCut bg] message received:', msg.type, msg.action || '');
   if (msg.type === "MANUAL_DOWNLOAD") {
     doDownload(msg.url, msg.filename, msg.folder)
       .then(() => sendResponse({ ok: true }))
@@ -67,11 +68,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 // ══════════════════════════════════════════════════
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install' || details.reason === 'update') {
-    chrome.storage.local.clear(() => {
-      console.log('[AutoCut] Storage cleared on', details.reason);
+    chrome.storage.local.get(['flowSettings', 'dark'], (keep) => {
+      chrome.storage.local.clear(() => {
+        chrome.storage.local.set({
+          ...(keep.flowSettings ? { flowSettings: keep.flowSettings } : {}),
+          ...(keep.dark !== undefined ? { dark: keep.dark } : {}),
+        });
+      });
     });
   }
 });
+
 
 // ══════════════════════════════════════════════════
 //  MANUAL DOWNLOAD HANDLER
@@ -83,16 +90,19 @@ async function handleManualDownload(images) {
   const folder = r.saveProject ? `AutoCut/${r.saveProject}` : "AutoCut";
   const prefix = r.prefix || "scene_";
 
+  console.log('[AutoCut] handleManualDownload → folder:', folder, '| images:', images.length);
+  console.log('[AutoCut] storage r:', JSON.stringify(r));
+
   const seen = new Set();
   for (const img of images) {
     if (seen.has(img.id)) continue;
     seen.add(img.id);
 
-    // content.js sets img.filename — use it directly.
-    // If somehow missing, fall back to a safe name.
     const filename =
       img.filename ||
       buildFilename(prefix, img.scene_number || 1, img.scene_description || "");
+    
+    console.log('[AutoCut] downloading → filename:', filename, '| folder:', folder, '| url:', img.url.slice(0, 60));
     await doDownload(img.url, filename, folder);
   }
 }

@@ -474,7 +474,19 @@ async function executeAction() {
   const capturedImages = storage.capturedImages || [];
   const allScenes      = storage.scenes         || [];
   const prefix         = storage.prefix         || "scene_";
-  const imgsPerScene   = storage.flowSettings?.count || 1;
+    // لو flowSettings مش موجودة في storage، اقرأ الـ count من Flow DOM مباشرة
+  let imgsPerScene = storage.flowSettings?.count || 1;
+  if (!storage.flowSettings) {
+    const mainBtn = findMainSettingsBtn();
+    if (mainBtn) {
+      const countMatch = mainBtn.textContent.match(/x(\d)/);
+      if (countMatch) {
+        imgsPerScene = parseInt(countMatch[1]);
+        console.log('[AutoCut] flowSettings missing — read count from DOM:', imgsPerScene);
+      }
+    }
+  }
+  console.log('[AutoCut] executeAction → imgsPerScene:', imgsPerScene, '| flowSettings:', JSON.stringify(storage.flowSettings));
   const orderedTiles   = getInnerTiles();
   const selectedData   = [];
   const seen           = new Set();
@@ -512,8 +524,12 @@ async function executeAction() {
     // }
 
     const scene = allScenes[sceneIndex];
-    sceneNumber = scene ? scene.scene_number      : sceneIndex + 1;
-    sceneDesc   = scene ? scene.scene_description : "";
+    if (!scene) {
+      console.warn(`[AutoCut] tile ${idx} → sceneIndex ${sceneIndex} خارج نطاق الـ JSON (${allScenes.length} مشاهد) — skip`);
+      continue;
+    }
+    sceneNumber = scene.scene_number;
+    sceneDesc   = scene.scene_description;
 
     // الاسم دايماً من الـ DOM — مش من المخزن
     filename = buildFilename(prefix, sceneNumber, sceneDesc, imgsPerScene > 1 ? version : null);
@@ -526,8 +542,10 @@ async function executeAction() {
 
   if (controlMode === "download") {
     try {
+      console.log('[AutoCut] sending EXECUTE_SELECTION:', JSON.stringify(selectedData.map(d => d.filename)));
       chrome.runtime.sendMessage({ type: "EXECUTE_SELECTION", action: "download", images: selectedData });
-    } catch {
+    } catch (e) {
+      console.error('[AutoCut] sendMessage failed:', e.message);
       showContextInvalidatedWarning();
       return;
     }
