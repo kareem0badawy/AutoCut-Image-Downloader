@@ -1,5 +1,5 @@
 ﻿// ═══════════════════════════════════════════════════
-//  AutoCut v2.2 — background.js
+//  AutoCut v1.1.1 — background.js
 // ═══════════════════════════════════════════════════
 
 const MAX_RETRIES = 3;
@@ -208,7 +208,12 @@ async function runQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
     await setStorage({
       lastProgress: { i, total: scenesToRun.length, scene, done, fail },
     });
-    await sleep(2000);
+
+    // Smart cooldown — scales with imgsPerScene and failure count
+    const imgsPerScene = flowSettings?.count || 1;
+    const cooldown = calcCooldown(imgsPerScene, fail);
+    sendLog("info", `⏱ Cooldown: ${cooldown / 1000}s (x${imgsPerScene} imgs, ${fail} fails)`);
+    await sleep(cooldown);
   }
 
   const finalDone = (await getStorage("doneCount")) || 0;
@@ -598,6 +603,18 @@ async function saveSessionHistory(total, done, fail, duration) {
   if (history.length > 20) history.splice(20);
   await setStorage({ sessionHistory: history });
   chrome.runtime.sendMessage({ type: "HISTORY_UPDATE" }).catch(() => {});
+}
+
+// ══════════════════════════════════════════════════
+//  SMART COOLDOWN  (delay between scenes based on imgsPerScene + failures)
+// ══════════════════════════════════════════════════
+function calcCooldown(imgsPerScene, failCount) {
+  // base delay per image count: x1=2s, x2=5s, x3=8s, x4=12s
+  const base = [2000, 5000, 8000, 12000];
+  let delay = base[Math.min((imgsPerScene || 1) - 1, 3)];
+  // if there are failures in this session, add 3s per failure (max +15s)
+  if (failCount > 0) delay += Math.min(failCount * 3000, 15000);
+  return Math.min(delay, 30000);
 }
 
 // ══════════════════════════════════════════════════

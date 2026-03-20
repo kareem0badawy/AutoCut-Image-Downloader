@@ -1,5 +1,5 @@
-﻿// AutoCut content script v2.2
-console.log("AutoCut v2.2 ready");
+﻿// AutoCut content script v1.1.1
+console.log("AutoCut v1.1.1 ready");
 
 // ══════════════════════════════════════════════════
 //  STATE
@@ -618,10 +618,12 @@ async function deleteSingleTile(tile) {
     tile.scrollIntoView({ block: "center", inline: "center" });
     await sleep(200);
 
-    const moreBtn = tile.querySelector('button[aria-haspopup="menu"]');
-    if (!moreBtn) { console.warn("AutoCut: مش لاقي زرار الـ 3 نقط"); return false; }
-
-    clickElement(moreBtn);
+    // trigger right-click context menu
+    tile.dispatchEvent(new MouseEvent("contextmenu", {
+      bubbles: true, cancelable: true,
+      clientX: tile.getBoundingClientRect().left + 10,
+      clientY: tile.getBoundingClientRect().top  + 10,
+    }));
     await sleep(400);
 
     const deleteBtn = findDeleteBtn();
@@ -637,7 +639,9 @@ async function deleteSingleTile(tile) {
 }
 
 function findDeleteBtn() {
-  const menu = document.querySelector('[role="menu"][data-state="open"]');
+  // جرب الـ context menu أو الـ dropdown menu
+  const menu = document.querySelector('[role="menu"][data-state="open"]')
+             || document.querySelector('[role="menu"]');
   if (!menu) return null;
   for (const item of menu.querySelectorAll('[role="menuitem"]')) {
     const icon = item.querySelector("i");
