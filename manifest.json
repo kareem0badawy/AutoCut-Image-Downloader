@@ -1,7 +1,7 @@
 ﻿{
   "manifest_version": 3,
   "name": "AutoCut Image Downloader",
-  "version": "1.1.1",
+  "version": "1.2.1",
   "description": "Download AI generated images from Google Flow automatically",
   "permissions": [
     "downloads", "activeTab", "scripting",
@@ -31,8 +31,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://labs.google/*"],
+      "matches": ["https://labs.google/fx/ar/tools/flow/*", "https://labs.google/fx/tools/flow/*"],
       "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://labs.google/fx/tools/whisk/*", "https://labs.google/fx/ar/tools/whisk/*"],
+      "js": ["content_whisk.js"],
       "run_at": "document_idle"
     }
   ]

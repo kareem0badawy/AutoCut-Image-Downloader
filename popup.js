@@ -1,5 +1,5 @@
 ﻿// ═══════════════════════════════════════════════════
-//  AutoCut v1.1.1 — popup.js
+//  AutoCut v2.1 — popup.js
 // ═══════════════════════════════════════════════════
 
 let scenes = [], doneCount = 0, failCount = 0;
@@ -558,6 +558,26 @@ get('confirm-yes').addEventListener('click', () => {
     get('model-btns').innerHTML = '<span style="font-size:11px;color:var(--muted2)">اضغط "تحديث" لجلب الموديلات من Flow</span>';
     updateSettingsBtns();
     updateFlowToggleUI();
+    // reset Whisk tab
+    whiskScenes = []; whiskDoneCount = 0; whiskFailCount = 0;
+    get('whisk-upload-area').classList.remove('loaded');
+    get('whisk-upload-count').textContent   = '';
+    get('whisk-stat-total').textContent     = '0';
+    get('whisk-stat-done').textContent      = '0';
+    get('whisk-stat-fail').textContent      = '0';
+    get('whisk-log').innerHTML              = '';
+    get('whisk-log').style.display          = 'none';
+    get('whisk-progress-wrap').style.display = 'none';
+    get('whisk-progress-bar').style.width   = '0%';
+    get('whisk-start-btn').disabled         = true;
+    get('whisk-start-btn').style.display    = 'block';
+    get('whisk-stop-btn').style.display     = 'none';
+    get('whisk-retry-btn').disabled         = true;
+    get('whisk-prefix').value               = 'scene_';
+    get('whisk-project').value              = '';
+    get('whisk-auto-download').checked      = false;
+    get('whisk-auto-dl-hint').textContent   = 'موقف — استخدم الكنترول في الصفحة للتحميل اليدوي';
+    updateWhiskPathPreview();
   });
 });
 
@@ -771,3 +791,191 @@ get('apply-settings-btn').addEventListener('click', async () => {
     setTimeout(() => { status.style.display = 'none'; }, 3000);
   }
 });
+// ══════════════════════════════════════════════════
+//  WHISK TAB LOGIC
+// ══════════════════════════════════════════════════
+
+let whiskScenes = [], whiskDoneCount = 0, whiskFailCount = 0;
+
+// ── Path preview ──
+function updateWhiskPathPreview() {
+  const prefix  = get('whisk-prefix').value  || 'scene_';
+  const project = get('whisk-project').value.trim();
+  get('whisk-preview-project').textContent = project || '—';
+  get('whisk-preview-project').style.color = project ? 'var(--accent)' : 'var(--muted2)';
+  get('whisk-preview-file').textContent    = `${prefix}001_description.png`;
+}
+get('whisk-prefix').addEventListener('input',  updateWhiskPathPreview);
+get('whisk-project').addEventListener('input', updateWhiskPathPreview);
+
+// ── Save settings collapse ──
+let whiskSaveCollapsed = true;
+get('whisk-save-header').addEventListener('click', () => {
+  whiskSaveCollapsed = !whiskSaveCollapsed;
+  get('whisk-save-collapse').style.maxHeight = whiskSaveCollapsed ? '0' : '400px';
+  get('whisk-save-icon').style.transform     = whiskSaveCollapsed ? 'rotate(0deg)' : 'rotate(90deg)';
+});
+
+// ── Auto-download toggle ──
+get('whisk-auto-download').addEventListener('change', e => {
+  const on = e.target.checked;
+  chrome.storage.local.set({ whiskAutoDownload: on });
+  get('whisk-auto-dl-hint').textContent = on
+    ? 'مفعّل — الصور بتتحمل تلقائياً بعد كل مشهد'
+    : 'موقف — استخدم الكنترول في الصفحة للتحميل اليدوي';
+});
+
+// ── Restore state ──
+chrome.storage.local.get([
+  'whiskScenes','whiskDoneCount','whiskFailCount',
+  'whiskPrefix','whiskProject','whiskAutoDownload','whiskIsRunning'
+], r => {
+  if (r.whiskScenes?.length) {
+    whiskScenes = r.whiskScenes;
+    get('whisk-upload-area').classList.add('loaded');
+    get('whisk-upload-count').textContent = whiskScenes.length + ' مشهد جاهز ✓';
+    get('whisk-stat-total').textContent   = whiskScenes.length;
+    whiskCheckReady();
+  }
+  if (r.whiskDoneCount) { whiskDoneCount = r.whiskDoneCount; get('whisk-stat-done').textContent = whiskDoneCount; }
+  if (r.whiskFailCount) { whiskFailCount = r.whiskFailCount; get('whisk-stat-fail').textContent = whiskFailCount; }
+  if (r.whiskPrefix)  get('whisk-prefix').value  = r.whiskPrefix;
+  if (r.whiskProject) get('whisk-project').value = r.whiskProject;
+  updateWhiskPathPreview();
+
+  if (r.whiskAutoDownload === true) {
+    get('whisk-auto-download').checked     = true;
+    get('whisk-auto-dl-hint').textContent  = 'مفعّل — الصور بتتحمل تلقائياً بعد كل مشهد';
+  }
+  if (r.whiskIsRunning) {
+    get('whisk-start-btn').style.display = 'none';
+    get('whisk-stop-btn').style.display  = 'block';
+  }
+  whiskUpdateRetryBtn();
+});
+
+// ── Upload ──
+get('whisk-upload-area').addEventListener('click', () => get('whisk-json-input').click());
+get('whisk-json-input').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      whiskScenes = JSON.parse(ev.target.result);
+      chrome.storage.local.set({ whiskScenes, whiskDoneCount: 0, whiskFailCount: 0 });
+      get('whisk-upload-area').classList.add('loaded');
+      get('whisk-upload-count').textContent = whiskScenes.length + ' مشهد جاهز ✓';
+      get('whisk-stat-total').textContent   = whiskScenes.length;
+      get('whisk-stat-done').textContent    = '0';
+      get('whisk-stat-fail').textContent    = '0';
+      whiskDoneCount = 0; whiskFailCount = 0;
+      whiskCheckReady();
+      whiskAddLog('info', `تم تحميل ${whiskScenes.length} مشهد`);
+    } catch (e) { whiskAddLog('err', 'خطأ: ' + e.message); }
+  };
+  reader.readAsText(file, 'utf-8');
+});
+
+// ── Helpers ──
+function whiskCheckReady() {
+  get('whisk-start-btn').disabled = !whiskScenes.length;
+  whiskUpdateRetryBtn();
+}
+function whiskUpdateRetryBtn() {
+  get('whisk-retry-btn').disabled = !whiskScenes.some(s => s._failed);
+}
+function whiskBuildFolder() {
+  const project = get('whisk-project').value.trim();
+  return project ? `AutoCut/${project}` : 'AutoCut';
+}
+
+// ── Start ──
+get('whisk-start-btn').addEventListener('click', async () => {
+  const tabs = await chrome.tabs.query({ url: 'https://labs.google/fx/tools/whisk/*' });
+  const tab  = tabs[0];
+  if (!tab?.id) { whiskAddLog('err', 'افتح صفحة Whisk الأول'); return; }
+
+  const prefix  = get('whisk-prefix').value  || 'scene_';
+  const folder  = whiskBuildFolder();
+  chrome.storage.local.set({ whiskPrefix: prefix, whiskProject: get('whisk-project').value.trim(), whiskStopFlag: false });
+
+  get('whisk-start-btn').style.display  = 'none';
+  get('whisk-stop-btn').style.display   = 'block';
+  get('whisk-progress-wrap').style.display = 'flex';
+  get('whisk-log').style.display        = 'block';
+
+  chrome.runtime.sendMessage({ type: 'WHISK_START_QUEUE', scenes: whiskScenes, prefix, folder, tabId: tab.id });
+  whiskAddLog('info', `بدأ التشغيل ✓ → Downloads/${folder}/`);
+});
+
+// ── Stop ──
+get('whisk-stop-btn').addEventListener('click', () => {
+  chrome.storage.local.set({ whiskStopFlag: true });
+  whiskAddLog('info', '⏸ طلب إيقاف...');
+  get('whisk-start-btn').style.display = 'block';
+  get('whisk-stop-btn').style.display  = 'none';
+});
+
+// ── Inject Control ──
+get('whisk-inject-btn').addEventListener('click', async () => {
+  const tabs = await chrome.tabs.query({ url: 'https://labs.google/fx/tools/whisk/*' });
+  const tab  = tabs[0];
+  if (!tab?.id) { whiskAddLog('err', 'افتح صفحة Whisk الأول'); return; }
+  chrome.tabs.sendMessage(tab.id, { type: 'WHISK_INJECT_CONTROL' });
+  whiskAddLog('info', '🎯 تم تفعيل الكنترول في Whisk');
+});
+
+// ── Retry Failed ──
+get('whisk-retry-btn').addEventListener('click', async () => {
+  const failed = whiskScenes.filter(s => s._failed);
+  if (!failed.length) return;
+  const tabs = await chrome.tabs.query({ url: 'https://labs.google/fx/tools/whisk/*' });
+  const tab  = tabs[0];
+  if (!tab?.id) { whiskAddLog('err', 'افتح صفحة Whisk الأول'); return; }
+  const prefix = get('whisk-prefix').value || 'scene_';
+  const folder = whiskBuildFolder();
+  get('whisk-start-btn').style.display = 'none';
+  get('whisk-stop-btn').style.display  = 'block';
+  chrome.runtime.sendMessage({ type: 'WHISK_RETRY_FAILED', scenes: failed, prefix, folder, tabId: tab.id });
+  whiskAddLog('info', `↻ إعادة ${failed.length} مشاهد فاشلة`);
+});
+
+// ── Messages from background ──
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'WHISK_LOG') {
+    whiskAddLog(msg.logType, msg.msg);
+  } else if (msg.type === 'WHISK_PROGRESS') {
+    const pct = Math.round((msg.i / msg.total) * 100);
+    get('whisk-progress-bar').style.width    = pct + '%';
+    get('whisk-progress-pct').textContent    = pct + '%';
+    get('whisk-progress-scene').textContent  = `Scene ${msg.scene.scene_number}: ${(msg.scene.scene_description||'').slice(0,55)}`;
+    get('whisk-progress-wrap').style.display = 'flex';
+  } else if (msg.type === 'WHISK_STATS') {
+    whiskDoneCount = msg.done; whiskFailCount = msg.fail;
+    get('whisk-stat-done').textContent = msg.done;
+    get('whisk-stat-fail').textContent = msg.fail;
+    whiskUpdateRetryBtn();
+  } else if (msg.type === 'WHISK_DONE') {
+    get('whisk-start-btn').style.display  = 'block';
+    get('whisk-stop-btn').style.display   = 'none';
+    get('whisk-progress-bar').style.width = '100%';
+    get('whisk-progress-pct').textContent = '100%';
+    get('whisk-progress-scene').textContent = '🎉 اكتمل!';
+    chrome.storage.local.get(['whiskScenes'], r => {
+      if (r.whiskScenes) { whiskScenes = r.whiskScenes; }
+    });
+    whiskUpdateRetryBtn();
+  }
+});
+
+// ── Log helper ──
+function whiskAddLog(type, msg) {
+  const log = get('whisk-log');
+  log.style.display = 'block';
+  const d = document.createElement('div');
+  d.className   = type;
+  d.textContent = msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+}

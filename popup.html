@@ -244,7 +244,7 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
   <div class="logo">
     <div class="logo-icon">✂️</div>
     Auto<span style="color:var(--accent)">Cut</span>
-    <span class="logo-badge" id="version-badge">v1.1.1</span>
+    <span class="logo-badge" id="version-badge">v2.1</span>
   </div>
   <div class="header-actions">
     <button class="icon-btn" id="theme-btn">🌙</button>
@@ -254,10 +254,11 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
 
 <!-- Tabs -->
 <div class="tabs">
-  <div class="tab active" data-tab="main">الرئيسية</div>
+  <div class="tab active" data-tab="main">🎬 Flow</div>
   <div class="tab" data-tab="queue">القائمة</div>
   <div class="tab" data-tab="images">الصور</div>
   <div class="tab" data-tab="history">السجل</div>
+  <div class="tab" data-tab="whisk">✨ Whisk</div>
 </div>
 
 <!-- ══ TAB: MAIN ══════════════════════════════════ -->
@@ -501,6 +502,101 @@ input[type="text"]:focus { outline: none; border-color: var(--accent); box-shado
       <div class="history-empty">مفيش جلسات سابقة</div>
     </div>
   </div>
+</div>
+</div>
+
+<!-- ══ TAB: WHISK ═══════════════════════════════════ -->
+<div class="tab-content" id="tab-whisk">
+<div class="main">
+
+  <!-- Upload -->
+  <div class="card">
+    <div class="card-title" style="margin-bottom:8px">📂 ملف البرومبتات</div>
+    <div class="upload-area" id="whisk-upload-area">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text">اضغط لرفع <strong>prompts.json</strong></div>
+      <div class="upload-count" id="whisk-upload-count"></div>
+    </div>
+    <input type="file" id="whisk-json-input" accept=".json">
+  </div>
+
+  <!-- Save Settings -->
+  <div class="card">
+    <div class="card-header" id="whisk-save-header" style="cursor:pointer;user-select:none;margin-bottom:0">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="whisk-save-icon" style="font-size:11px;color:var(--muted2);transition:transform .2s">▶</span>
+        <div class="card-title" style="margin:0">💾 إعدادات الحفظ</div>
+      </div>
+    </div>
+    <div id="whisk-save-collapse" style="overflow:hidden;transition:max-height .3s ease;max-height:0">
+      <div style="padding-top:10px">
+
+        <div class="input-group">
+          <div class="input-label">prefix اسم الملف</div>
+          <input type="text" id="whisk-prefix" value="scene_" placeholder="scene_">
+        </div>
+
+        <div class="input-group" style="margin-top:8px">
+          <div class="input-label">📁 اسم المشروع</div>
+          <input type="text" id="whisk-project" value="" placeholder="مثال: MyProject">
+        </div>
+
+        <div class="path-preview">
+          <span class="path-fixed">Downloads</span>
+          <span class="path-sep">/</span>
+          <span class="path-fixed">AutoCut</span>
+          <span class="path-sep">/</span>
+          <span class="path-var" id="whisk-preview-project">—</span>
+          <span class="path-sep">/</span>
+          <span class="path-file" id="whisk-preview-file">scene_001_description.png</span>
+        </div>
+
+        <!-- Auto-download toggle — default مقفول -->
+        <div style="margin-top:10px">
+          <div class="toggle-row">
+            <span class="toggle-label">📥 تحميل تلقائي للصور</span>
+            <label class="toggle-wrap">
+              <input type="checkbox" id="whisk-auto-download">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="font-size:10px;color:var(--muted2);margin-top:4px" id="whisk-auto-dl-hint">
+            موقف — استخدم الكنترول في الصفحة للتحميل اليدوي
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="stat-val blue"  id="whisk-stat-total">0</div><div class="stat-lbl">إجمالي</div></div>
+    <div class="stat"><div class="stat-val green" id="whisk-stat-done">0</div><div class="stat-lbl">تم ✓</div></div>
+    <div class="stat"><div class="stat-val red"   id="whisk-stat-fail">0</div><div class="stat-lbl">فشل ✗</div></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="whisk-progress-wrap">
+    <div class="progress-header">
+      <span class="progress-label">التقدم</span>
+      <span class="progress-pct" id="whisk-progress-pct">0%</span>
+    </div>
+    <div class="progress-bar-bg"><div class="progress-bar" id="whisk-progress-bar"></div></div>
+    <div class="progress-scene" id="whisk-progress-scene"></div>
+  </div>
+
+  <!-- Buttons -->
+  <button class="btn btn-primary"   id="whisk-start-btn"  disabled>▶ ابدأ التشغيل</button>
+  <button class="btn btn-danger"    id="whisk-stop-btn"   style="display:none">⏹ إيقاف</button>
+  <button class="btn btn-secondary" id="whisk-inject-btn">🎯 تفعيل الكنترول في الصفحة</button>
+  <div class="btn-row">
+    <button class="btn btn-amber" id="whisk-retry-btn" disabled>↻ إعادة الفاشلين</button>
+  </div>
+
+  <!-- Log -->
+  <div class="log" id="whisk-log"></div>
+
 </div>
 </div>
 

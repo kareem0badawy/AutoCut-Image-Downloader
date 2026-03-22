@@ -1,5 +1,5 @@
 ﻿// ═══════════════════════════════════════════════════
-//  AutoCut v1.1.1 — background.js
+//  AutoCut v2.2 — background.js
 // ═══════════════════════════════════════════════════
 
 const MAX_RETRIES = 3;
@@ -51,6 +51,28 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === "RETRY_FAILED") {
     runQueue(msg.scenes, msg.prefix, msg.folder, msg.tabId, true);
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "WHISK_START_QUEUE") {
+    runWhiskQueue(msg.scenes, msg.prefix, msg.folder, msg.tabId, false);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "WHISK_RETRY_FAILED") {
+    runWhiskQueue(msg.scenes, msg.prefix, msg.folder, msg.tabId, true);
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.type === "WHISK_DOWNLOAD_BASE64") {
+    const savePath = (msg.folder || 'AutoCut/Whisk').replace(/[<>:"|?*]/g, '').replace(/\\/g, '/').trim();
+    const safeFile = (msg.filename || 'whisk_image.jpg').replace(/[\\/:*?"<>|]/g, '_');
+    chrome.downloads.download(
+      { url: msg.base64, filename: `${savePath}/${safeFile}`, saveAs: false },
+      (id) => sendResponse({ ok: true, id })
+    );
     return true;
   }
 
@@ -659,4 +681,156 @@ function setStorage(obj) {
 }
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+// ══════════════════════════════════════════════════
+//  WHISK QUEUE RUNNER
+// ══════════════════════════════════════════════════
+async function runWhiskQueue(scenes, prefix, folder, tabId, retryFailedOnly) {
+  startKeepAlive();
+
+  const sessionStart  = Date.now();
+  const savePath      = (folder || 'AutoCut').replace(/[<>:"|?*]/g, '').trim();
+  const scenesToRun   = retryFailedOnly ? scenes.filter(s => s._failed) : scenes;
+
+  await setStorage({
+    whiskIsRunning: true,
+    whiskStopFlag:  false,
+    ...(retryFailedOnly ? {} : { whiskDoneCount: 0, whiskFailCount: 0 }),
+  });
+
+  for (let i = 0; i < scenesToRun.length; i++) {
+    if (await getStorage('whiskStopFlag')) break;
+
+    const scene = scenesToRun[i];
+    const fname = buildFilename(prefix, scene.scene_number, scene.scene_description);
+
+    whiskSendLog('info', `[${i + 1}/${scenesToRun.length}] ${fname}`);
+    whiskSendProgress(i, scenesToRun.length, scene);
+
+    let ok = false;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_DELAYS[attempt - 1];
+        whiskSendLog('info', `↻ Retry ${attempt}/${MAX_RETRIES - 1} — waiting ${delay / 1000}s…`);
+        await sleep(delay);
+      }
+      ok = await processWhiskScene(scene, fname, tabId, savePath);
+      if (ok) break;
+    }
+
+    let done = (await getStorage('whiskDoneCount')) || 0;
+    let fail = (await getStorage('whiskFailCount')) || 0;
+
+    if (ok) {
+      done++;
+      await setStorage({ whiskDoneCount: done });
+      whiskSendLog('ok', `✓ ${fname}`);
+      scene._done   = true;
+      scene._failed = false;
+    } else {
+      fail++;
+      await setStorage({ whiskFailCount: fail });
+      whiskSendLog('err', `✗ Failed: ${fname}`);
+      scene._done   = false;
+      scene._failed = true;
+    }
+
+    // persist scene status
+    const allScenes = (await getStorage('whiskScenes')) || scenes;
+    const idx = allScenes.findIndex(s => s.scene_number === scene.scene_number);
+    if (idx !== -1) { allScenes[idx] = scene; await setStorage({ whiskScenes: allScenes }); }
+
+    whiskSendStats(done, fail);
+
+    // cooldown بين المشاهد
+    await sleep(3000);
+  }
+
+  const finalDone = (await getStorage('whiskDoneCount')) || 0;
+  const finalFail = (await getStorage('whiskFailCount')) || 0;
+  const duration  = Math.round((Date.now() - sessionStart) / 1000);
+
+  chrome.notifications.create({
+    type: 'basic', iconUrl: 'icons/icon128.png',
+    title: 'AutoCut Whisk — اكتمل!',
+    message: `✓ ${finalDone} صورة | ✗ ${finalFail} فشل | ${duration}s`,
+  });
+
+  whiskSendLog('ok', `🎉 Whisk done! ${finalDone} ✓  ${finalFail} ✗  (${duration}s)`);
+  chrome.runtime.sendMessage({ type: 'WHISK_DONE', done: finalDone, fail: finalFail }).catch(() => {});
+
+  stopKeepAlive();
+  await setStorage({ whiskIsRunning: false });
+}
+
+// ══════════════════════════════════════════════════
+//  PROCESS SINGLE WHISK SCENE
+// ══════════════════════════════════════════════════
+async function processWhiskScene(scene, fname, tabId, savePath) {
+  try {
+    // Step 1: بعت البرومبت وضغط Generate
+    const sendRes = await chrome.tabs.sendMessage(tabId, {
+      type:   'WHISK_SEND_PROMPT',
+      prompt: scene.main_prompt || '',
+    }).catch(e => ({ ok: false, error: e.message }));
+
+    if (!sendRes?.ok) {
+      whiskSendLog('err', sendRes?.error || 'Send failed');
+      return false;
+    }
+    whiskSendLog('ok', 'Prompt sent ✓');
+
+    // Step 2: poll للصور الجديدة
+    whiskSendLog('info', 'Waiting for image…');
+    const pollRes = await chrome.tabs.sendMessage(tabId, {
+      type:       'WHISK_POLL_IMAGES',
+      beforeSrcs: sendRes.beforeSrcs || [],
+      timeout:    90000,
+    }).catch(e => ({ ok: false, newSrcs: [] }));
+
+    if (!pollRes?.newSrcs?.length) {
+      whiskSendLog('err', 'Image not found after timeout');
+      return false;
+    }
+    whiskSendLog('ok', `Image found (${pollRes.newSrcs.length} new)`);
+
+    // Step 3: تحميل تلقائي لو مفعّل
+    const shouldDl = (await getStorage('whiskAutoDownload')) === true;
+    if (shouldDl) {
+      // نستخدم hover+click download بتاع Whisk
+      for (let vi = 0; vi < pollRes.newSrcs.length; vi++) {
+        const version  = pollRes.newSrcs.length > 1 ? vi + 1 : null;
+        const dlFname  = buildFilename(prefix, scene.scene_number, scene.scene_description, version);
+        const dlFolder = savePath + '/Whisk';
+        await chrome.tabs.sendMessage(tabId, {
+          type:     'WHISK_DOWNLOAD_IMAGES_BY_SRC',
+          srcs:     [pollRes.newSrcs[vi]],
+          filename: dlFname,
+          folder:   dlFolder,
+        }).catch(() => {});
+        await sleep(500);
+      }
+      whiskSendLog('ok', `Saved: ${fname}`);
+    } else {
+      whiskSendLog('info', `📋 Captured (auto-download OFF): ${fname}`);
+    }
+
+    return true;
+  } catch (e) {
+    whiskSendLog('err', e.message?.slice(0, 150) || 'Unknown error');
+    return false;
+  }
+}
+
+// ══════════════════════════════════════════════════
+//  WHISK MESSAGING HELPERS
+// ══════════════════════════════════════════════════
+function whiskSendLog(type, msg) {
+  chrome.runtime.sendMessage({ type: 'WHISK_LOG', logType: type, msg }).catch(() => {});
+}
+function whiskSendProgress(i, total, scene) {
+  chrome.runtime.sendMessage({ type: 'WHISK_PROGRESS', i, total, scene }).catch(() => {});
+}
+function whiskSendStats(done, fail) {
+  chrome.runtime.sendMessage({ type: 'WHISK_STATS', done, fail }).catch(() => {});
 }
