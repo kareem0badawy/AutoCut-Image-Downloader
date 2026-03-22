@@ -94,7 +94,7 @@ scene_001_Friedrich Hecker....jpg
 ```js
 function getInnerTiles() {
   return Array.from(document.querySelectorAll('[data-tile-id]')).filter(tile =>
-    tile.querySelector('img[alt="صورة تم إنشاؤها"]') !== null &&
+    tile.querySelector('img[src*="getMediaUrlRedirect"], img[alt="صورة تم إنشاؤها"], img[alt="Generated image"]') !== null &&
     tile.querySelector('[data-tile-id]') === null
   );
 }

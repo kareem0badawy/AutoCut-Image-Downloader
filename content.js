@@ -53,7 +53,7 @@ function clickElement(el) {
 function getImageTile(el) {
   const nested = el.querySelector("[data-tile-id]");
   if (nested) return getImageTile(nested);
-  return el.querySelector('img[alt="صورة تم إنشاؤها"]') ? el : null;
+  return el.querySelector('img[src*="getMediaUrlRedirect"], img[alt="صورة تم إنشاؤها"], img[alt="Generated image"]') ? el : null;
 }
 
 function getInnerTiles() {
@@ -498,7 +498,7 @@ async function executeAction() {
     const tile = getTileById(tileId);
     if (!tile) continue;
 
-    const img = tile.querySelector('img[alt="صورة تم إنشاؤها"]');
+    const img = tile.querySelector('img[src*="getMediaUrlRedirect"], img[alt="صورة تم إنشاؤها"], img[alt="Generated image"]');
     if (!img) continue;
 
     const rawSrc = img.getAttribute("src") || img.src;
@@ -688,7 +688,7 @@ function startObserver() {
 // ══════════════════════════════════════════════════
 function captureImagesFromDOM() {
   return getInnerTiles().map((tile, index) => {
-    const img    = tile.querySelector('img[alt="صورة تم إنشاؤها"]');
+    const img    = tile.querySelector('img[src*="getMediaUrlRedirect"], img[alt="صورة تم إنشاؤها"], img[alt="Generated image"]');
     const anchor = tile.querySelector("a[href]");
     const rawSrc = img.getAttribute("src") || img.src;
     const url    = rawSrc.startsWith("http") ? rawSrc : `${location.origin}${rawSrc}`;
